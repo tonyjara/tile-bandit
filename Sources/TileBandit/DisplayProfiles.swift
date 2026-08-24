@@ -46,15 +46,35 @@ enum DisplayIdentity {
     /// one key, so repeats get a "#n" suffix; that keeps *how many* displays
     /// are attached part of the identity.
     static func snapshot() -> [DisplayRef] {
+        keyedScreens()
+            .map { DisplayRef(key: $0.key, name: name(for: $0.screen)) }
+            .sorted { $0.key < $1.key }
+    }
+
+    /// The attached screens under the same keys `snapshot()` records — how a
+    /// stored per-display grid finds the monitor it was drawn for.
+    static func screensByKey() -> [String: NSScreen] {
+        Dictionary(uniqueKeysWithValues: keyedScreens())
+    }
+
+    /// The key a screen is filed under right now. Depends on what else is
+    /// attached (identical panels get the "#n" suffix), so it can't be derived
+    /// from the screen alone.
+    static func storedKey(for screen: NSScreen) -> String {
+        let id = displayID(of: screen)
+        return keyedScreens().first { displayID(of: $0.screen) == id }?.key ?? key(for: screen)
+    }
+
+    /// Screens paired with their fingerprint key, in NSScreen order. The
+    /// suffixing is here so every caller agrees on it.
+    private static func keyedScreens() -> [(key: String, screen: NSScreen)] {
         var counts: [String: Int] = [:]
-        var refs: [DisplayRef] = []
-        for screen in NSScreen.screens {
+        return NSScreen.screens.map { screen in
             let base = key(for: screen)
             let count = (counts[base] ?? 0) + 1
             counts[base] = count
-            refs.append(DisplayRef(key: count == 1 ? base : "\(base)#\(count)", name: name(for: screen)))
+            return (count == 1 ? base : "\(base)#\(count)", screen)
         }
-        return refs.sorted { $0.key < $1.key }
     }
 
     /// Name a setup from what's plugged in: "MacBook", "MacBook + M14",
@@ -161,22 +181,28 @@ final class DisplayProfileManager {
             // workspaces already in it survive the upgrade. Deliberately only
             // when it's the *only* profile — an unbound duplicate sitting
             // alongside others must never be silently claimed.
-            store.config.profiles[0].displays = displays
+            // bind(to:) rather than assigning `displays`: the workspaces
+            // carried over from a pre-profiles config hold unbound grids, and
+            // this is the moment they learn which monitors they're for.
+            store.config.profiles[0].bind(to: displays)
             store.config.profiles[0].name = uniqueName(
                 DisplayIdentity.inferredName(for: displays),
                 excluding: store.config.profiles[0].id
             )
             id = store.config.profiles[0].id
         } else {
-            let profile = DisplayProfile(
+            var profile = DisplayProfile(
                 name: uniqueName(DisplayIdentity.inferredName(for: displays)),
-                displays: displays,
                 // Seeded from the setup you were just on, so plugging in a
                 // monitor never drops you into a profile with no workspaces
                 // and no hotkeys. Fresh ids: the copies are this profile's
                 // own from here on, free to have their own grids.
                 workspaces: clonedWorkspaces(of: store.activeProfile ?? store.config.profiles.first)
             )
+            // The clones' grids are keyed to the *other* setup's displays;
+            // bind(to:) moves them onto these ones (and gives a monitor this
+            // setup gained a copy of the first grid to start from).
+            profile.bind(to: displays)
             store.config.profiles.append(profile)
             id = profile.id
         }

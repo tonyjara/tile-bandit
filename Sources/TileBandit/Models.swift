@@ -185,19 +185,67 @@ struct SnapSettings: Codable, Equatable {
     }
 }
 
+/// One display's slice of a workspace: how that screen is divided and which
+/// apps sit in which of its cells. A workspace holds one per display in its
+/// profile — that's what lets a single workspace say "editor and terminal side
+/// by side on the big monitor, Slack filling the laptop".
+struct DisplayGrid: Codable, Equatable, Hashable, Identifiable {
+    /// The `DisplayRef.key` this grid belongs to. Empty means *unbound*: a grid
+    /// from a config written before grids were per-display, or one in a profile
+    /// not bound to any displays yet. `Workspace.rebindGrids(to:)` gives those
+    /// real keys; until then they apply wherever a window already is.
+    var displayKey: String
+    var columns: Int
+    var rows: Int
+    /// bundleId → assigned cells. Apps without an entry are left alone by Apply Layout.
+    var layout: [String: GridRegion]
+
+    static let unboundKey = ""
+
+    var id: String { displayKey }
+    var isUnbound: Bool { displayKey == Self.unboundKey }
+    var size: GridSize { GridSize(columns: columns, rows: rows) }
+
+    init(
+        displayKey: String = DisplayGrid.unboundKey,
+        columns: Int = 2,
+        rows: Int = 2,
+        layout: [String: GridRegion] = [:]
+    ) {
+        self.displayKey = displayKey
+        self.columns = min(max(columns, 1), 12)
+        self.rows = min(max(rows, 1), 12)
+        self.layout = layout
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            displayKey: try container.decodeIfPresent(String.self, forKey: .displayKey) ?? DisplayGrid.unboundKey,
+            columns: try container.decodeIfPresent(Int.self, forKey: .columns) ?? 2,
+            rows: try container.decodeIfPresent(Int.self, forKey: .rows) ?? 2,
+            layout: try container.decodeIfPresent([String: GridRegion].self, forKey: .layout) ?? [:]
+        )
+    }
+}
+
 struct Workspace: Codable, Equatable, Hashable, Identifiable {
     var id: UUID
     var name: String
     var apps: [AppRef]
     var shortcut: Shortcut?
     var launchMissingApps: Bool
-    /// Grid this workspace divides the screen into (for layout and drag-snap).
-    var gridColumns: Int
-    var gridRows: Int
-    /// bundleId → assigned cells. Apps without an entry are left alone by Apply Layout.
-    var layout: [String: GridRegion]
+    /// One entry per display of the owning profile. Sparse on purpose — a
+    /// display nobody has laid anything out on yet simply has no grid, and
+    /// falls back to the snap defaults.
+    var grids: [DisplayGrid]
 
-    var grid: GridSize { GridSize(columns: gridColumns, rows: gridRows) }
+    private enum CodingKeys: String, CodingKey {
+        case id, name, apps, shortcut, launchMissingApps, grids
+        /// Pre-v3: one grid for the whole workspace, applied on whichever
+        /// screen each window happened to be. Read for migration, never written.
+        case gridColumns, gridRows, layout
+    }
 
     init(
         id: UUID = UUID(),
@@ -205,31 +253,116 @@ struct Workspace: Codable, Equatable, Hashable, Identifiable {
         apps: [AppRef] = [],
         shortcut: Shortcut? = nil,
         launchMissingApps: Bool = false,
-        gridColumns: Int = 2,
-        gridRows: Int = 2,
-        layout: [String: GridRegion] = [:]
+        grids: [DisplayGrid] = []
     ) {
         self.id = id
         self.name = name
         self.apps = apps
         self.shortcut = shortcut
         self.launchMissingApps = launchMissingApps
-        self.gridColumns = gridColumns
-        self.gridRows = gridRows
-        self.layout = layout
+        self.grids = grids
     }
 
     // Lenient decoding so the config file can be edited by hand without every key present.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
-        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Untitled"
-        apps = try container.decodeIfPresent([AppRef].self, forKey: .apps) ?? []
-        shortcut = try container.decodeIfPresent(Shortcut.self, forKey: .shortcut)
-        launchMissingApps = try container.decodeIfPresent(Bool.self, forKey: .launchMissingApps) ?? false
-        gridColumns = min(max(try container.decodeIfPresent(Int.self, forKey: .gridColumns) ?? 2, 1), 12)
-        gridRows = min(max(try container.decodeIfPresent(Int.self, forKey: .gridRows) ?? 2, 1), 12)
-        layout = try container.decodeIfPresent([String: GridRegion].self, forKey: .layout) ?? [:]
+        let grids: [DisplayGrid]
+        if let stored = try container.decodeIfPresent([DisplayGrid].self, forKey: .grids) {
+            grids = stored
+        } else {
+            // Pre-v3 file: fold the workspace-wide grid into a single unbound
+            // one. DisplayProfile hands it to that setup's displays on the way in.
+            grids = [DisplayGrid(
+                columns: try container.decodeIfPresent(Int.self, forKey: .gridColumns) ?? 2,
+                rows: try container.decodeIfPresent(Int.self, forKey: .gridRows) ?? 2,
+                layout: try container.decodeIfPresent([String: GridRegion].self, forKey: .layout) ?? [:]
+            )]
+        }
+        self.init(
+            id: try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
+            name: try container.decodeIfPresent(String.self, forKey: .name) ?? "Untitled",
+            apps: try container.decodeIfPresent([AppRef].self, forKey: .apps) ?? [],
+            shortcut: try container.decodeIfPresent(Shortcut.self, forKey: .shortcut),
+            launchMissingApps: try container.decodeIfPresent(Bool.self, forKey: .launchMissingApps) ?? false,
+            grids: grids
+        )
+    }
+
+    /// Only the current keys — the pre-v3 ones are dropped on the next write.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(apps, forKey: .apps)
+        try container.encodeIfPresent(shortcut, forKey: .shortcut)
+        try container.encode(launchMissingApps, forKey: .launchMissingApps)
+        try container.encode(grids, forKey: .grids)
+    }
+
+    /// Whether Apply Grid Layout has anything to do.
+    var hasLayout: Bool { grids.contains { !$0.layout.isEmpty } }
+
+    var hasUnboundGrid: Bool { grids.contains(where: \.isUnbound) }
+
+    /// The grid stored for one display, if there is one.
+    func grid(for displayKey: String) -> DisplayGrid? {
+        grids.first { $0.displayKey == displayKey }
+    }
+
+    /// Every display this app is placed on. Normally one — the editor moves an
+    /// app rather than copying it — but a migration or a hand-edit can place it
+    /// on several, which LayoutEngine resolves per window.
+    func placements(of bundleId: String) -> [(grid: DisplayGrid, region: GridRegion)] {
+        grids.compactMap { grid in grid.layout[bundleId].map { (grid, $0) } }
+    }
+
+    mutating func setGrid(_ grid: DisplayGrid) {
+        if let index = grids.firstIndex(where: { $0.displayKey == grid.displayKey }) {
+            grids[index] = grid
+        } else {
+            grids.append(grid)
+        }
+    }
+
+    /// Assign an app to cells on one display. An app lives on one display at a
+    /// time, so this clears it from the others: dragging a tile onto another
+    /// monitor's grid *moves* it there.
+    mutating func place(_ bundleId: String, at region: GridRegion, on displayKey: String) {
+        for index in grids.indices where grids[index].displayKey != displayKey {
+            grids[index].layout.removeValue(forKey: bundleId)
+        }
+        var target = grid(for: displayKey) ?? DisplayGrid(displayKey: displayKey)
+        target.layout[bundleId] = region
+        setGrid(target)
+    }
+
+    mutating func unplace(_ bundleId: String, on displayKey: String) {
+        guard let index = grids.firstIndex(where: { $0.displayKey == displayKey }) else { return }
+        grids[index].layout.removeValue(forKey: bundleId)
+    }
+
+    /// Point the grids at a set of displays: the i-th grid moves to the i-th
+    /// display. Displays past the last grid get a copy of the first one (so
+    /// migrating a single-grid workspace lands your old layout on every screen,
+    /// ready to be pruned), and grids past the last display merge into the last
+    /// kept one. Either way a setup with a different number of screens never
+    /// silently drops a placement — an overlap is easier to fix than lost work.
+    mutating func rebindGrids(to displays: [DisplayRef]) {
+        guard !displays.isEmpty else { return }
+        let source = grids
+        guard let first = source.first else {
+            grids = displays.map { DisplayGrid(displayKey: $0.key) }
+            return
+        }
+        var rebound = displays.enumerated().map { index, display -> DisplayGrid in
+            var grid = index < source.count ? source[index] : first
+            grid.displayKey = display.key
+            return grid
+        }
+        for dropped in source.dropFirst(displays.count) {
+            rebound[rebound.count - 1].layout.merge(dropped.layout) { kept, _ in kept }
+        }
+        grids = rebound
     }
 }
 
@@ -289,6 +422,24 @@ struct DisplayProfile: Codable, Equatable, Hashable, Identifiable {
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Untitled"
         displays = try container.decodeIfPresent([DisplayRef].self, forKey: .displays) ?? []
         workspaces = try container.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
+        // A file written before grids were per-display leaves each workspace
+        // holding one unbound grid. Hand it to every display in this setup
+        // rather than guessing which monitor was meant — the layout you had
+        // shows up on both, and you delete what doesn't belong on each.
+        for index in workspaces.indices where workspaces[index].hasUnboundGrid {
+            workspaces[index].rebindGrids(to: displays)
+        }
+    }
+
+    /// Claim a set of displays, moving the workspaces' grids onto them. Used
+    /// wherever a profile changes which hardware it stands for: adopting a
+    /// migrated profile, cloning one for a setup with different monitors, or
+    /// the Displays tab's bind-to-attached.
+    mutating func bind(to displays: [DisplayRef]) {
+        self.displays = displays
+        for index in workspaces.indices {
+            workspaces[index].rebindGrids(to: displays)
+        }
     }
 
     /// The fingerprint matched against the attached displays. A set is safe
@@ -354,8 +505,9 @@ enum MenuBarIcon: String, Codable, CaseIterable, Identifiable {
 
 struct Config: Codable, Equatable {
     /// 1 = flat `workspaces` list; 2 = workspaces nested inside display
-    /// profiles. Reading a v1 file migrates it (see `init(from:)`).
-    static let currentVersion = 2
+    /// profiles; 3 = one grid per display inside a workspace. Reading an older
+    /// file migrates it (see `init(from:)` here and in Workspace/DisplayProfile).
+    static let currentVersion = 3
 
     var version: Int
     /// One entry per display setup. Workspaces live inside a profile, so the

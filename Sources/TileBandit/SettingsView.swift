@@ -106,14 +106,15 @@ struct WorkspacesTab: View {
 
             Divider()
 
-            if let id = profileID, store.config.profiles.contains(where: { $0.id == id }) {
+            if let id = profileID, let profile = store.config.profiles.first(where: { $0.id == id }) {
                 WorkspaceListPane(
                     workspaces: store.workspacesBinding(profile: id),
+                    displays: profile.displays,
                     config: store.config,
                     recorder: recorder
                 )
                 // Fresh selection state per profile — workspace ids don't
-                // carry across them.
+                // carry across them, and neither does the display being edited.
                 .id(id)
             } else {
                 Text("No display profile yet. Plug your displays in, or hit Re-detect on the Displays tab.")
@@ -127,6 +128,8 @@ struct WorkspacesTab: View {
 /// The workspace list + detail editor for one display profile.
 struct WorkspaceListPane: View {
     @Binding var workspaces: [Workspace]
+    /// The profile's displays — one grid per entry inside every workspace.
+    let displays: [DisplayRef]
     let config: Config
     @ObservedObject var recorder: ShortcutRecorder
     @State private var selection: UUID?
@@ -164,6 +167,7 @@ struct WorkspaceListPane: View {
             if let index = workspaces.firstIndex(where: { $0.id == selection }) {
                 WorkspaceDetail(
                     workspace: $workspaces[index],
+                    displays: displays,
                     config: config,
                     recorder: recorder
                 )
@@ -198,6 +202,9 @@ struct WorkspaceListPane: View {
         if number <= 9 {
             workspace.shortcut = Shortcut(key: "\(number)")
         }
+        // An empty grid per display of this profile, so the editor has one to
+        // show for every monitor in the setup.
+        workspace.rebindGrids(to: displays)
         workspaces.append(workspace)
         selection = workspace.id
     }
@@ -210,73 +217,134 @@ struct WorkspaceListPane: View {
 
 struct WorkspaceDetail: View {
     @Binding var workspace: Workspace
+    let displays: [DisplayRef]
     let config: Config
     @ObservedObject var recorder: ShortcutRecorder
 
+    /// Which display's grid the editor is showing. Kept as a key rather than
+    /// an index so a profile gaining or losing a monitor can't point it at the
+    /// wrong one; `editingKey` falls back when the key goes away.
+    @State private var selectedDisplay: String?
+
+    // Scrolls because the pane is taller than the 640pt window once a display
+    // picker and both grids' controls are in it — clipping the Apply Layout
+    // hint would hide the one line explaining what the grid does.
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField("Name", text: $workspace.name)
-                .textFieldStyle(.roundedBorder)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                TextField("Name", text: $workspace.name)
+                    .textFieldStyle(.roundedBorder)
 
-            HStack {
-                Text("Shortcut")
-                ShortcutField(
-                    shortcut: $workspace.shortcut,
-                    recorder: recorder,
-                    recordingID: "workspace-\(workspace.id.uuidString)"
-                )
-                Spacer()
-            }
+                HStack {
+                    Text("Shortcut")
+                    ShortcutField(
+                        shortcut: $workspace.shortcut,
+                        recorder: recorder,
+                        recordingID: "workspace-\(workspace.id.uuidString)"
+                    )
+                    Spacer()
+                }
 
-            Toggle("Launch apps that aren't running when switching", isOn: $workspace.launchMissingApps)
+                Toggle("Launch apps that aren't running when switching", isOn: $workspace.launchMissingApps)
 
-            Divider()
+                Divider()
 
-            Text("Apps in this workspace")
-                .font(.headline)
-
-            AppListEditor(apps: $workspace.apps)
-                .frame(height: 150)
-
-            Text("Tip: add the same app to several workspaces — it stays visible and keeps its position when you switch.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Divider()
-
-            HStack {
-                Text("Grid Layout")
+                Text("Apps in this workspace")
                     .font(.headline)
-                Spacer()
-                if !AccessibilityPermission.isGranted {
-                    Button("Grant Accessibility…") { AccessibilityPermission.requestAndOpenSettings() }
+
+                AppListEditor(apps: $workspace.apps)
+                    .frame(height: 150)
+
+                Text("Tip: add the same app to several workspaces — it stays visible and keeps its position when you switch.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+
+                HStack {
+                    Text("Grid Layout")
+                        .font(.headline)
+                    Spacer()
+                    if !AccessibilityPermission.isGranted {
+                        Button("Grant Accessibility…") { AccessibilityPermission.requestAndOpenSettings() }
+                    }
+                }
+
+                displayScope
+
+                HStack(spacing: 16) {
+                    Stepper("Columns: \(grid.wrappedValue.columns)", value: grid.columns, in: 1...8)
+                    Stepper("Rows: \(grid.wrappedValue.rows)", value: grid.rows, in: 1...8)
+                    Spacer()
+                }
+
+                GridLayoutEditor(workspace: $workspace, displays: displays, displayKey: editingKey)
+
+                Text(gridHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+        }
+    }
+
+    /// One grid per display, so the picker is how you say "…and on the other
+    /// monitor". A single-display setup gets a label instead of a control.
+    @ViewBuilder
+    private var displayScope: some View {
+        if displays.count > 1 {
+            Picker("Display", selection: displaySelection) {
+                ForEach(displays) { display in
+                    Text(display.name).tag(display.key)
                 }
             }
-
-            HStack(spacing: 16) {
-                Stepper("Columns: \(workspace.gridColumns)", value: $workspace.gridColumns, in: 1...8)
-                Stepper("Rows: \(workspace.gridRows)", value: $workspace.gridRows, in: 1...8)
-                Spacer()
-            }
-
-            GridLayoutEditor(workspace: $workspace)
-
-            Text(gridHint)
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        } else if let only = displays.first {
+            Text("Grid for \(only.name)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            Text("This profile isn't bound to any displays yet, so there's one grid, "
+                 + "applied on whichever screen a window is already on.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .padding(16)
+    }
+
+    /// The display being edited: the picked one while it still exists, else
+    /// the first — or the unbound grid when the profile has no displays.
+    private var editingKey: String {
+        if let selectedDisplay, displays.contains(where: { $0.key == selectedDisplay }) {
+            return selectedDisplay
+        }
+        return displays.first?.key ?? DisplayGrid.unboundKey
+    }
+
+    private var displaySelection: Binding<String> {
+        Binding(get: { editingKey }, set: { selectedDisplay = $0 })
+    }
+
+    /// Grids are stored sparsely; this materialises one for the display the
+    /// moment the steppers write to it.
+    private var grid: Binding<DisplayGrid> {
+        let key = editingKey
+        return Binding(
+            get: { workspace.grid(for: key) ?? DisplayGrid(displayKey: key) },
+            set: { workspace.setGrid($0) }
+        )
     }
 
     private var gridHint: String {
         var parts: [String] = []
         if let shortcut = config.applyLayoutShortcut {
-            parts.append("\(shortcut.display) (or menu bar → Apply Grid Layout) resizes this workspace's apps to their cells.")
+            parts.append("\(shortcut.display) (or menu bar → Apply Grid Layout) moves this workspace's apps to the display they're placed on and resizes them to their cells.")
         } else {
-            parts.append("Menu bar → Apply Grid Layout resizes this workspace's apps to their cells.")
+            parts.append("Menu bar → Apply Grid Layout moves this workspace's apps to the display they're placed on and resizes them to their cells.")
         }
         if config.snap.enabled, config.snap.hasModifiers {
-            parts.append("Hold \(config.snap.modifierDisplay) while dragging any window to snap it to the grid.")
+            parts.append("Hold \(config.snap.modifierDisplay) while dragging any window to snap it to that display's grid.")
         }
         return parts.joined(separator: " ")
     }
@@ -284,10 +352,16 @@ struct WorkspaceDetail: View {
 
 // MARK: - Grid layout editor
 
-/// Bento editor: drag an app chip onto the grid to place it, drag a placed
-/// tile to move it, drag its corner handle to span more cells, ✕ removes it.
+/// Bento editor for one display's grid: drag an app chip onto the grid to
+/// place it, drag a placed tile to move it, drag its corner handle to span
+/// more cells, ✕ removes it. An app placed on another display's grid shows up
+/// as a dimmed chip — dragging it here moves it to this monitor.
 struct GridLayoutEditor: View {
     @Binding var workspace: Workspace
+    let displays: [DisplayRef]
+    /// The display whose grid is being edited (`DisplayGrid.unboundKey` for a
+    /// profile with no displays bound).
+    let displayKey: String
 
     /// Bundle id of the chip currently being dragged (set by onDrag; the
     /// drop delegate reads it directly so no async item-provider decoding).
@@ -303,8 +377,24 @@ struct GridLayoutEditor: View {
 
     private static let palette: [Color] = [.blue, .orange, .green, .purple, .pink, .teal, .red, .indigo]
 
-    private var unplacedApps: [AppRef] {
-        workspace.apps.filter { workspace.layout[$0.bundleId] == nil }
+    /// The grid being edited. Absent until something is placed on it, so an
+    /// untouched display reads as an empty default rather than nothing at all.
+    private var grid: DisplayGrid {
+        workspace.grid(for: displayKey) ?? DisplayGrid(displayKey: displayKey)
+    }
+
+    /// Everything not already on this display's grid — including apps sitting
+    /// on another monitor's, which a drag over here moves.
+    private var availableApps: [AppRef] {
+        workspace.apps.filter { grid.layout[$0.bundleId] == nil }
+    }
+
+    /// The other display an app is currently placed on, if any.
+    private func placedElsewhere(_ bundleId: String) -> String? {
+        guard let other = workspace.grids.first(where: {
+            $0.displayKey != displayKey && $0.layout[bundleId] != nil
+        }) else { return nil }
+        return displays.first { $0.key == other.displayKey }?.name ?? "another display"
     }
 
     var body: some View {
@@ -314,14 +404,14 @@ struct GridLayoutEditor: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                if !unplacedApps.isEmpty {
+                if !availableApps.isEmpty {
                     HStack(spacing: 6) {
                         Text("Drag onto the grid:")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 6) {
-                                ForEach(unplacedApps) { app in
+                                ForEach(availableApps) { app in
                                     chip(for: app)
                                 }
                             }
@@ -340,17 +430,25 @@ struct GridLayoutEditor: View {
     }
 
     private func chip(for app: AppRef) -> some View {
-        HStack(spacing: 4) {
+        let elsewhere = placedElsewhere(app.bundleId)
+        return HStack(spacing: 4) {
             Circle()
                 .fill(color(for: app.bundleId))
                 .frame(width: 7, height: 7)
             Text(app.name)
                 .font(.caption)
+            if let elsewhere {
+                Text("on \(elsewhere)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(Capsule().fill(Color.secondary.opacity(0.12)))
         .overlay(Capsule().strokeBorder(Color.secondary.opacity(0.4)))
+        .opacity(elsewhere == nil ? 1 : 0.65)
+        .help(elsewhere.map { "Placed on \($0) — drag here to move it" } ?? app.bundleId)
         .onDrag {
             draggedChip = app.bundleId
             return NSItemProvider(object: app.bundleId as NSString)
@@ -359,8 +457,8 @@ struct GridLayoutEditor: View {
 
     private var canvas: some View {
         GeometryReader { geo in
-            let cols = max(1, workspace.gridColumns)
-            let rows = max(1, workspace.gridRows)
+            let cols = grid.columns
+            let rows = grid.rows
             let cellWidth = geo.size.width / CGFloat(cols)
             let cellHeight = geo.size.height / CGFloat(rows)
 
@@ -376,7 +474,7 @@ struct GridLayoutEditor: View {
                 }
 
                 ForEach(workspace.apps) { app in
-                    if let stored = workspace.layout[app.bundleId] {
+                    if let stored = grid.layout[app.bundleId] {
                         let region = (interaction?.bundleId == app.bundleId ? interaction!.preview : stored)
                             .clamped(columns: cols, rows: rows)
                         tile(
@@ -422,7 +520,9 @@ struct GridLayoutEditor: View {
                 size: geo.size,
                 draggedChip: $draggedChip,
                 preview: $dropPreview,
-                layout: $workspace.layout
+                place: { bundleId, region in
+                    workspace.place(bundleId, at: region, on: displayKey)
+                }
             ))
         }
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
@@ -452,7 +552,7 @@ struct GridLayoutEditor: View {
             )
             .overlay(alignment: .topTrailing) {
                 Button {
-                    workspace.layout.removeValue(forKey: app.bundleId)
+                    workspace.unplace(app.bundleId, on: displayKey)
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 11))
@@ -484,7 +584,7 @@ struct GridLayoutEditor: View {
     private func moveGesture(app: AppRef, cols: Int, rows: Int, canvasSize: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 2, coordinateSpace: .named("gridCanvas"))
             .onChanged { value in
-                guard let stored = workspace.layout[app.bundleId] else { return }
+                guard let stored = grid.layout[app.bundleId] else { return }
                 let region = stored.clamped(columns: cols, rows: rows)
                 let startCell = cell(at: value.startLocation, cols: cols, rows: rows, size: canvasSize)
                 let currentCell = cell(at: value.location, cols: cols, rows: rows, size: canvasSize)
@@ -505,7 +605,7 @@ struct GridLayoutEditor: View {
     private func resizeGesture(app: AppRef, cols: Int, rows: Int, canvasSize: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .named("gridCanvas"))
             .onChanged { value in
-                guard let stored = workspace.layout[app.bundleId] else { return }
+                guard let stored = grid.layout[app.bundleId] else { return }
                 let region = stored.clamped(columns: cols, rows: rows)
                 let currentCell = cell(at: value.location, cols: cols, rows: rows, size: canvasSize)
                 interaction = TileInteraction(
@@ -523,7 +623,7 @@ struct GridLayoutEditor: View {
 
     private func commitInteraction() {
         if let interaction {
-            workspace.layout[interaction.bundleId] = interaction.preview
+            workspace.place(interaction.bundleId, at: interaction.preview, on: displayKey)
         }
         interaction = nil
     }
@@ -540,14 +640,15 @@ struct GridLayoutEditor: View {
     }
 }
 
-/// Places the dragged chip on the cell under the cursor.
+/// Places the dragged chip on the cell under the cursor. `place` moves the app
+/// off any other display's grid — an app belongs to one monitor at a time.
 private struct GridDropDelegate: DropDelegate {
     let cols: Int
     let rows: Int
     let size: CGSize
     @Binding var draggedChip: String?
     @Binding var preview: GridRegion?
-    @Binding var layout: [String: GridRegion]
+    let place: (String, GridRegion) -> Void
 
     func validateDrop(info: DropInfo) -> Bool { draggedChip != nil }
 
@@ -566,7 +667,7 @@ private struct GridDropDelegate: DropDelegate {
             preview = nil
         }
         guard let bundleId = draggedChip, let region = preview else { return false }
-        layout[bundleId] = region
+        place(bundleId, region)
         return true
     }
 
@@ -1030,7 +1131,10 @@ struct DisplaysTab: View {
         where other != index && store.config.profiles[other].displayKeys == keys {
             store.config.profiles[other].displays = []
         }
-        store.config.profiles[index].displays = snapshot
+        // bind(to:) rather than a plain assignment: the workspaces' grids were
+        // keyed to whatever this profile stood for before, and they follow it
+        // onto the new displays.
+        store.config.profiles[index].bind(to: snapshot)
         displays.resolve()
     }
 

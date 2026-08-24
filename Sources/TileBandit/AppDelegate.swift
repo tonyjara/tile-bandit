@@ -333,7 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(applyLayoutAction) {
-            return engine.activeWorkspace.map { !$0.layout.isEmpty } ?? false
+            return engine.activeWorkspace?.hasLayout ?? false
         }
         if menuItem.action == #selector(nextWorkspace) || menuItem.action == #selector(previousWorkspace) {
             return !store.workspaces.isEmpty

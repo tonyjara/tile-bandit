@@ -33,18 +33,34 @@ sourcekit-lsp, which understands SPM natively).
   back to the default and `available` filters the picker, so a symbol this
   macOS lacks can never leave a blank, unclickable status item.
 - `Models.swift` — `Config`/`DisplayProfile`/`DisplayRef`/`Workspace`/`AppRef`/
-  `Shortcut` plus the grid types (`GridRegion`/`GridCell`/`GridSize`/
-  `SnapSettings`) and `MenuBarIcon` (raw values *are* SF Symbol names; an
-  unknown one decodes to `.fallback` rather than throwing), Codable with
-  lenient decoding (config is hand-editable).
+  `Shortcut` plus the grid types (`DisplayGrid`/`GridRegion`/`GridCell`/
+  `GridSize`/`SnapSettings`) and `MenuBarIcon` (raw values *are* SF Symbol
+  names; an unknown one decodes to `.fallback` rather than throwing), Codable
+  with lenient decoding (config is hand-editable).
   `GridSize` also owns the cell↔rect math shared by LayoutEngine, SnapManager,
   and the settings editor (rects are AppKit coords; row 0 is the top row).
-  **Workspaces live inside a `DisplayProfile`**, not at the top level;
-  `Config.currentVersion` is 2 and decoding a v1 file (flat `workspaces`)
-  migrates it into a single *unbound* profile, which the first detection run
-  adopts onto whatever displays are attached. Decoding is the migration, so
-  `version` is normalised to current in memory and the old top-level
-  `workspaces` key is dropped on the next write.
+  **Workspaces live inside a `DisplayProfile`**, not at the top level, and
+  **a workspace holds one `DisplayGrid` per display** (`grids`, keyed by
+  `DisplayRef.key`) — that's what lets one workspace put some apps on the big
+  monitor and others on the laptop. `grids` is sparse: a display nobody has
+  laid anything out on has no entry. An app belongs to one display at a time,
+  which `place(_:at:on:)` enforces by clearing it from the other grids;
+  `placements(of:)` still returns a list because a migration or a hand-edit can
+  put one app on several, and LayoutEngine resolves that per window.
+  `rebindGrids(to:)` moves a workspace's grids onto a different set of displays
+  (i-th grid → i-th display, extra displays get a copy of the first, extra
+  grids merge into the last) — it's how migration, profile adoption, cloning
+  and Displays-tab binding all avoid dropping a placement; `DisplayProfile.bind(to:)`
+  is the profile-level wrapper and should be preferred over assigning
+  `displays` directly.
+  `Config.currentVersion` is 3. Decoding *is* the migration: a v1 file (flat
+  `workspaces`) becomes a single *unbound* profile, which the first detection
+  run adopts onto whatever displays are attached; a v2 workspace's single
+  `gridColumns`/`gridRows`/`layout` becomes one unbound `DisplayGrid`, which
+  `DisplayProfile.init(from:)` hands to *every* display in the setup (copying
+  beats guessing which monitor was meant — the user deletes what doesn't
+  belong). `version` is normalised in memory and the legacy keys are dropped on
+  the next write.
 - `DisplayProfiles.swift` — display-setup detection. `DisplayIdentity` builds a
   stable per-screen key (built-in → `builtin`; externals → EDID
   `vendor-model-serial`, since serial is 0 on plenty of monitors; otherwise the
@@ -58,7 +74,9 @@ sourcekit-lsp, which understands SPM natively).
   else adopt a *lone* unbound profile (the migration carrier — deliberately
   only when it's the only one, so a duplicate is never silently claimed), else
   create one cloning the profile you were just on (fresh workspace ids).
-  All permission-free.
+  All permission-free. `screensByKey()`/`storedKey(for:)` are the reverse
+  lookup — how a stored `DisplayGrid` finds the monitor it was drawn for, using
+  the same "#n" suffixing as `snapshot()`.
 - `ConfigStore.swift` — ObservableObject; JSON at
   `~/.config/tilebandit/config.json`; debounced autosave. Also holds the
   non-persisted `activeProfileID` (derived from the hardware) and the
@@ -92,10 +110,16 @@ sourcekit-lsp, which understands SPM natively).
 - `LayoutEngine.swift` — the AX-based tiling (the one part needing the
   Accessibility permission): `AccessibilityPermission` + `AX` helpers
   (AXUIElement window enumeration, frame get/set, top-left↔bottom-left
-  coordinate flip) and `LayoutEngine.apply(workspace)`, which resizes each
-  laid-out app's standard windows to its `GridRegion` on the window's current
-  screen. Runs only from the Apply Grid Layout hotkey (default ⌥L) or menu
-  item.
+  coordinate flip) and `LayoutEngine.apply(workspace)`, which **moves** each
+  laid-out app's standard windows to the display it's placed on and sizes them
+  to their `GridRegion` there. This is the only thing that moves a window
+  between screens; it runs only from the Apply Grid Layout hotkey (default ⌥L)
+  or menu item. `target(for:placements:screens:)` picks the display: the one
+  the window is already on if the app is placed there (only happens with an
+  app on several grids), else the first placement whose display is attached,
+  else — nothing attached matches, e.g. a profile forced from the menu for a
+  desk you aren't at — the window's current screen, so the action tiles
+  something rather than appearing broken.
 - `SnapManager.swift` — bentobox drag-snap: *global mouse* NSEvent monitors
   (mouse monitors are permission-free; global *key* monitors would need
   Accessibility) watch drags; holding the configured modifiers (default ⌃⌥)
@@ -103,7 +127,10 @@ sourcekit-lsp, which understands SPM natively).
   the highlighted cells on release — drag across cells to span them. Arms only
   after the window's AX position actually changes, so modifier-drags inside
   window content (e.g. ⌥-select in a terminal) never snap. Uses the active
-  workspace's grid, else `SnapSettings` fallback dims.
+  workspace's grid *for the display being dragged on*, re-read when the drag
+  crosses onto another screen; a display with no grid falls back to the
+  `SnapSettings` dims. The key lookup walks the attached screens, so it happens
+  on engage and screen-crossing only, never per mouse event.
 - `HotkeyManager.swift` — Carbon `RegisterEventHotKey` (chosen over
   CGEventTap/NSEvent monitors specifically because it needs no permission).
   Refuses shortcuts without modifiers.
@@ -130,15 +157,24 @@ sourcekit-lsp, which understands SPM natively).
   The Workspaces and Shortcuts tabs are scoped to one display profile via a
   shared `profileID` selection (`ProfileScopePicker`) that follows the attached
   hardware but can be pointed at any profile; `WorkspaceListPane` is keyed by
-  `.id(profileID)` so its selection state doesn't leak across profiles.
+  `.id(profileID)` so its selection state (and which display's grid is being
+  edited) doesn't leak across profiles. `WorkspaceDetail` picks the display
+  whose grid is shown — a segmented picker with 2+ displays, a label with one,
+  and the unbound grid when the profile is bound to none — tracked as a *key*
+  rather than an index so a profile gaining or losing a monitor can't point it
+  at the wrong grid.
   The Displays tab shows what's attached (with the keys detection uses), which
   profile matched, and per-profile rename / duplicate / bind-to-attached /
   delete. Binding a profile unbinds any other holding the same fingerprint —
   two claimants would make matching a coin flip.
-  `GridLayoutEditor` is drag-based: drag an app chip onto the grid to place
-  it (internal DnD — the dragged bundleId is stashed in view state, no async
-  NSItemProvider decoding), drag a tile to move, drag its corner handle to
-  span cells, ✕ removes. `ShortcutField` shows the current combo as text
+  `GridLayoutEditor` edits one display's grid and is drag-based: drag an app
+  chip onto the grid to place it (internal DnD — the dragged bundleId is
+  stashed in view state, no async NSItemProvider decoding), drag a tile to
+  move, drag its corner handle to span cells, ✕ removes. Chips cover every app
+  not on *this* grid, dimmed and labelled with the other display when the app
+  sits on one, so moving an app between monitors is a single drag. Grids are
+  materialised on first write (the steppers' binding), which is why an
+  untouched display stays out of the config. `ShortcutField` shows the current combo as text
   with Reassign (records via ShortcutRecorder) and clear buttons.
 
 ## Conventions

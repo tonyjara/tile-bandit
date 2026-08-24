@@ -180,12 +180,12 @@ enum AX {
     }
 }
 
-/// Applies a workspace's grid layout: every app with assigned cells gets its
-/// standard windows resized to that region on whichever screen each window
-/// currently occupies.
+/// Applies a workspace's grid layout: every app placed on a display's grid
+/// gets its standard windows moved to that display and resized to its region.
 ///
 /// Deliberately an explicit action (hotkey / menu item) — workspace
-/// *switching* still never moves a window.
+/// *switching* still never moves a window. This is also the only thing that
+/// moves a window *between* displays: that's the point of a grid per display.
 enum LayoutEngine {
     @discardableResult
     static func apply(_ workspace: Workspace) -> Bool {
@@ -194,18 +194,54 @@ enum LayoutEngine {
             return false
         }
 
-        let grid = workspace.grid
+        let screens = DisplayIdentity.screensByKey()
         var movedAnything = false
         for ref in workspace.apps {
-            guard let region = workspace.layout[ref.bundleId] else { continue }
+            let placements = workspace.placements(of: ref.bundleId)
+            guard !placements.isEmpty else { continue }
             for app in NSRunningApplication.runningApplications(withBundleIdentifier: ref.bundleId) {
                 for window in AX.standardWindows(pid: app.processIdentifier) {
-                    guard let screen = AX.screenOf(window) ?? NSScreen.main else { continue }
-                    AX.setFrame(window, to: grid.frame(for: region, in: screen.visibleFrame))
+                    guard let target = target(for: window, placements: placements, screens: screens) else { continue }
+                    AX.setFrame(window, to: target.grid.size.frame(for: target.region, in: target.screen.visibleFrame))
                     movedAnything = true
                 }
             }
         }
         return movedAnything
+    }
+
+    /// Which display's grid this window should land in.
+    ///
+    /// One placement is the normal case — the editor moves an app between
+    /// grids rather than copying it — and then the window goes to that display
+    /// whether or not it was already there. The other branches cover configs
+    /// where an app sits on several grids (a pre-v3 migration, a hand-edit) and
+    /// setups where the profile's displays aren't attached (a profile forced
+    /// from the menu for a desk you aren't at, or a grid never bound to one).
+    private static func target(
+        for window: AXUIElement,
+        placements: [(grid: DisplayGrid, region: GridRegion)],
+        screens: [String: NSScreen]
+    ) -> (grid: DisplayGrid, region: GridRegion, screen: NSScreen)? {
+        let current = AX.screenOf(window)
+        // Placed on the display it's already on: stay there and just tile.
+        // Matched by display ID — NSScreen.screens hands back fresh objects,
+        // so the instances can't be compared directly.
+        if let current {
+            let currentID = DisplayIdentity.displayID(of: current)
+            if let match = placements.first(where: {
+                screens[$0.grid.displayKey].map(DisplayIdentity.displayID(of:)) == currentID
+            }) {
+                return (match.grid, match.region, current)
+            }
+        }
+        if let match = placements.first(where: { screens[$0.grid.displayKey] != nil }),
+           let screen = screens[match.grid.displayKey] {
+            return (match.grid, match.region, screen)
+        }
+        // None of the assigned displays is attached — tile where the window
+        // already is rather than doing nothing at all.
+        guard let first = placements.first, let screen = current ?? NSScreen.main else { return nil }
+        return (first.grid, first.region, screen)
     }
 }

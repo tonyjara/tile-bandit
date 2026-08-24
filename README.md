@@ -45,8 +45,8 @@ Carbon `RegisterEventHotKey`, and read `NSScreen` metadata.
 Tile Bandit recognises which screens are attached and switches to that setup's
 workspaces automatically. Each setup — MacBook alone, MacBook + external, lid
 closed on a Studio Display — is a **display profile** with its own workspaces,
-its own hotkey assignments and its own grids, so a 3×2 bento on the big display
-doesn't follow you onto the 14".
+its own hotkey assignments and its own grids — one grid *per display* — so a
+3×2 bento on the big monitor doesn't follow you onto the 14".
 
 - Profiles are **created automatically** the first time a setup is seen, named
   from the displays themselves ("MacBook", "MacBook + M14", "Studio Display"),
@@ -68,6 +68,30 @@ doesn't follow you onto the 14".
 Settings → **Displays** lists what's attached (with the identifiers detection
 uses), which profile matched, and lets you rename, duplicate, delete, or point a
 profile at the displays attached right now.
+
+## Grid layout
+
+A workspace holds **one grid per display** in its profile. That's how you say
+"in this workspace, the editor and terminal go side by side on the big monitor
+and Slack fills the laptop" — each screen gets its own dimensions and its own
+app placements.
+
+In Settings → **Workspaces**, the Grid Layout section has a display picker
+(when the profile has more than one screen). Pick a display, set its columns
+and rows, then drag app chips onto the grid; drag a tile to move it, its corner
+dot to span cells, ✕ to take it off. An app placed on another monitor's grid
+shows up as a dimmed chip labelled with that display — drag it over and it
+*moves* there. An app lives on one display at a time.
+
+**Apply Grid Layout** (default ⌥L, also in the menu) then moves each placed
+app's windows to the display it's assigned to and sizes them to their cells.
+This is the only thing that moves a window between screens, and it only ever
+runs when you ask for it: switching workspaces still never moves a window.
+
+Drag-snapping follows the same per-display grids — hold ⌃⌥ while dragging a
+window and you get the grid belonging to the screen you're over, switching as
+you cross onto another one. A display the workspace has nothing laid out on
+falls back to the default dimensions in Settings.
 
 ## Run it
 
@@ -117,7 +141,7 @@ like, then hit **Reload Config** in the menu bar.
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "profiles": [
     {
       "id": "9C2A1B44-0000-4000-8000-000000000001",
@@ -134,10 +158,16 @@ like, then hit **Reload Config** in the menu bar.
             { "bundleId": "com.apple.Terminal", "name": "Terminal", "path": "/System/Applications/Utilities/Terminal.app" }
           ],
           "shortcut": { "key": "1", "control": false, "option": true, "shift": false, "command": false },
-          "gridColumns": 2,
-          "gridRows": 2,
-          "layout": { "com.apple.Terminal": { "col": 0, "row": 0, "colSpan": 1, "rowSpan": 2 } },
-          "launchMissingApps": false
+          "launchMissingApps": false,
+          "grids": [
+            {
+              "displayKey": "edid:12462-25053-0",
+              "columns": 2,
+              "rows": 2,
+              "layout": { "com.apple.Terminal": { "col": 0, "row": 0, "colSpan": 1, "rowSpan": 2 } }
+            },
+            { "displayKey": "builtin", "columns": 1, "rows": 1, "layout": {} }
+          ]
         }
       ]
     }
@@ -151,10 +181,22 @@ like, then hit **Reload Config** in the menu bar.
 
 Workspaces live inside a profile; `displays` is the fingerprint that profile
 matches (a `displays: []` profile is unbound and matches nothing until you bind
-it in Settings → Displays). A pre-profiles `version: 1` config with a top-level
-`workspaces` list is migrated on first launch: the workspaces move into a
-profile bound to whatever displays are attached at that moment, named after
-them. Nothing is lost — apps, shortcuts and grids all come along.
+it in Settings → Displays). Each workspace's `grids` has one entry per display,
+tied to the profile's `displays[].key`; an entry with an empty `displayKey` is
+unbound and applies wherever a window already is.
+
+Older configs are migrated on read, and the current shape is written back on
+the next save:
+
+- `version: 1` (a top-level `workspaces` list) moves its workspaces into a
+  profile bound to whatever displays are attached at that moment, named after
+  them.
+- `version: 2` (one `gridColumns`/`gridRows`/`layout` per workspace) gives that
+  grid to *every* display in the profile rather than guessing which monitor you
+  meant, so your old layout shows up on each screen and you delete what doesn't
+  belong there.
+
+Nothing is lost either way — apps, shortcuts and placements all come along.
 
 `hideUnassignedShortcut` triggers the cleanup action: with a workspace active
 it hides everything outside that workspace (great for "I pulled up a couple of
@@ -202,14 +244,13 @@ Sources/TileBandit/
 ## Roadmap
 
 Done since the first cut: window tiling via the Accessibility API, drag-snap,
-per-display workspaces (display profiles), a shortcut recorder, per-workspace
-focus memory, and a pickable menu bar icon.
+per-display workspaces (display profiles), a grid per display inside each
+workspace, a shortcut recorder, per-workspace focus memory, and a pickable menu
+bar icon.
 
 - Launch at login.
 - Option to *keep* unassigned apps visible during switches (current behavior
   hides everything outside the target workspace).
-- Per-workspace screen assignment inside a multi-display profile — Apply Grid
-  Layout currently tiles each window on whichever screen it already occupies.
 - Persist the last workspace per profile across relaunches (it's in-memory
   today, so it survives replugging a monitor but not quitting the app).
 

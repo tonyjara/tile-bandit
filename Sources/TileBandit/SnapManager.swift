@@ -32,7 +32,9 @@ final class SnapManager {
 
     private struct SnapSession {
         let window: AXUIElement
-        let grid: GridSize
+        /// The dragged-on display's grid — re-read when the drag crosses onto
+        /// another screen, since each display has its own in a workspace.
+        var grid: GridSize
         var screen: NSScreen
         var anchor: GridCell
         var region: GridRegion
@@ -99,7 +101,7 @@ final class SnapManager {
 
     private func engage(_ window: AXUIElement, at location: CGPoint) {
         guard let screen = screenAt(location) else { return }
-        let grid = currentGrid()
+        let grid = currentGrid(on: screen)
         let anchor = grid.cell(at: location, in: screen.visibleFrame)
         let region = GridRegion.bounding(anchor, anchor)
         pending = nil
@@ -110,8 +112,10 @@ final class SnapManager {
     private func updateSession(at location: CGPoint) {
         guard var session else { return }
         if let screen = screenAt(location), screen.frame != session.screen.frame {
-            // Crossed onto another display: re-anchor there.
+            // Crossed onto another display: that display has its own grid in
+            // this workspace, so pick it up before re-anchoring.
             session.screen = screen
+            session.grid = currentGrid(on: screen)
             session.anchor = session.grid.cell(at: location, in: screen.visibleFrame)
         }
         let current = session.grid.cell(at: location, in: session.screen.visibleFrame)
@@ -133,9 +137,15 @@ final class SnapManager {
 
     // MARK: - Helpers
 
-    /// Active workspace's grid when there is one, else the configured fallback.
-    private func currentGrid() -> GridSize {
-        if let workspace = engine.activeWorkspace { return workspace.grid }
+    /// The active workspace's grid *for this display*, else the configured
+    /// fallback dims — which also covers a display the workspace has never had
+    /// anything laid out on. Only called when a drag engages or crosses
+    /// screens, not per mouse event: the key lookup walks the attached screens.
+    private func currentGrid(on screen: NSScreen) -> GridSize {
+        if let workspace = engine.activeWorkspace,
+           let grid = workspace.grid(for: DisplayIdentity.storedKey(for: screen)) ?? workspace.grids.first(where: \.isUnbound) {
+            return grid.size
+        }
         return GridSize(columns: store.config.snap.defaultColumns, rows: store.config.snap.defaultRows)
     }
 
