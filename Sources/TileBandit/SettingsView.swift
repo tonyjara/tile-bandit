@@ -97,11 +97,20 @@ struct WorkspacesTab: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                ProfileScopePicker(store: store, profileID: $profileID)
-                    .frame(maxWidth: 340)
-                Spacer()
+            VStack(alignment: .leading, spacing: 8) {
+                // Applies everywhere, unlike the profile-scoped list below.
+                Toggle(
+                    "Follow focus: focusing an app that lives in another workspace switches to it",
+                    isOn: $store.config.followFocusedApp
+                )
+
+                HStack(spacing: 8) {
+                    ProfileScopePicker(store: store, profileID: $profileID)
+                        .frame(maxWidth: 340)
+                    Spacer()
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
 
             Divider()
@@ -703,7 +712,7 @@ struct ShortcutField: View {
                 Button(shortcut == nil ? "Assign…" : "Reassign…") {
                     recorder.begin(id: recordingID) { shortcut = $0 }
                 }
-                .help("Press a key with at least one of ⌃⌥⇧⌘ (keys 0–9, a–z)")
+                .help("Press a key with at least one of ⌃⌥⇧⌘ (keys 0–9, a–z, punctuation)")
                 if shortcut != nil {
                     Button {
                         shortcut = nil
@@ -894,6 +903,8 @@ struct ShortcutsTab: View {
                     shortcutRow("Apply grid layout (active workspace)", $store.config.applyLayoutShortcut, id: "apply-layout")
                     shortcutRow("Next workspace", $store.config.nextWorkspaceShortcut, id: "next-workspace")
                     shortcutRow("Previous workspace", $store.config.previousWorkspaceShortcut, id: "previous-workspace")
+                    shortcutRow("Open settings", $store.config.openSettingsShortcut, id: "open-settings")
+                    shortcutRow("Reload config from disk", $store.config.reloadConfigShortcut, id: "reload-config")
                 }
                 Section("Grid snapping") {
                     Toggle("Snap a window to the grid when dragging it with modifiers held", isOn: $store.config.snap.enabled)

@@ -26,7 +26,10 @@ sourcekit-lsp, which understands SPM natively).
   profile, with a submenu to force another (useful for a desk you aren't at —
   the next display change re-detects and takes it back) plus Re-detect
   Displays; Reload Config re-resolves too, since the file may have renamed or
-  removed profiles. The status item's image and title are set in
+  removed profiles. Settings… and Reload Config carry configurable hotkeys
+  too (defaults ⌥, and ⌥R) — the menu items take their key equivalents from
+  the config rather than hard-coding them, so a reassignment shows up in the
+  menu. The status item's image and title are set in
   `rebuildMenu()` (not once at launch) so `menuBarIcon`/`showWorkspaceName`
   changes apply live. The `MenuBarIcon` → `NSImage` extension lives here rather
   than in Models so the model layer stays AppKit-free; `resolvedImage` falls
@@ -101,6 +104,18 @@ sourcekit-lsp, which understands SPM natively).
   the one just left (new profiles are clones, so "Code" on the laptop lines up
   with "Code" at the desk), else nothing at all, leaving windows alone. That
   memory is in-memory only, like `lastFocusedApp`.
+  Focus can also drive a switch (config `followFocusedApp`, default on):
+  every activation restarts a 0.2s timer, and `followFocus` then switches to
+  the workspace owning whatever is *frontmost at that point* — Cmd-Tab /
+  Spotlight / a Dock click unhide the app anyway, so the workspace comes along
+  rather than one window sitting stranded over the current one. Deciding on
+  the settled frontmost app instead of on the notification is what makes it
+  reliable: hiding apps hands focus around, so a switch arrives as a burst of
+  activations (coalesced into one check, which then sees our own focusApp's
+  app and does nothing), and an app unhidden by Cmd-Tab can still report
+  `isHidden` at the moment it activates. Floating apps never pull you away.
+  The app is written into `lastFocusedApp` before switching so focus lands
+  on what the user reached for, not on that workspace's previous focus.
   `hideUnassignedApps()` is the cleanup action (default hotkey ⌥0, menu item,
   and runs at launch): hides everything outside the active workspace, or outside
   all of the live profile's workspaces when none is active — "assigned" means
@@ -133,7 +148,10 @@ sourcekit-lsp, which understands SPM natively).
   on engage and screen-crossing only, never per mouse event.
 - `HotkeyManager.swift` — Carbon `RegisterEventHotKey` (chosen over
   CGEventTap/NSEvent monitors specifically because it needs no permission).
-  Refuses shortcuts without modifiers.
+  Refuses shortcuts without modifiers. `keyCodes` is the whole supported key
+  set — 0-9, a-z plus common punctuation (`,` is there so ⌥, can be the
+  Settings shortcut, matching the macOS convention); KeyDebugger's verdict and
+  ShortcutRecorder's accepted keys both derive from it.
 - `KeyDebugger.swift` — key-press debugger for the Shortcuts tab. Uses a
   *local* NSEvent monitor (permission-free; a global monitor would need
   Accessibility). Persistent: only the Stop button stops it. Consumes keyDown
@@ -154,6 +172,8 @@ sourcekit-lsp, which understands SPM natively).
   (NSHostingController); tabs: Workspaces, Shortcuts, Displays, Floating Apps,
   Menu Bar (icon grid over `MenuBarIcon.available` + the workspace-name toggle,
   with a preview that mirrors the same fallback the status item uses).
+  The follow-focus toggle sits on its own row above the Workspaces tab's
+  profile picker — it's global, unlike everything below the picker.
   The Workspaces and Shortcuts tabs are scoped to one display profile via a
   shared `profileID` selection (`ProfileScopePicker`) that follows the attached
   hardware but can be pointed at any profile; `WorkspaceListPane` is keyed by

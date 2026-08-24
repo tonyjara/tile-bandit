@@ -10,7 +10,8 @@ struct AppRef: Codable, Equatable, Hashable, Identifiable {
     var id: String { bundleId }
 }
 
-/// A global keyboard shortcut. `key` is a single character (0-9, a-z).
+/// A global keyboard shortcut. `key` is a single character — see
+/// `HotkeyManager.keyCodes` for the set (0-9, a-z and common punctuation).
 struct Shortcut: Codable, Equatable, Hashable {
     var key: String
     var control: Bool
@@ -520,16 +521,23 @@ struct Config: Codable, Equatable {
     var applyLayoutShortcut: Shortcut?
     var nextWorkspaceShortcut: Shortcut?
     var previousWorkspaceShortcut: Shortcut?
+    var openSettingsShortcut: Shortcut?
+    var reloadConfigShortcut: Shortcut?
     var snap: SnapSettings
     /// Menu bar appearance. The name of the active workspace sits next to the
     /// icon unless you'd rather keep the menu bar narrow.
     var menuBarIcon: MenuBarIcon
     var showWorkspaceName: Bool
+    /// Focusing an app that belongs to another workspace (Cmd-Tab, Spotlight,
+    /// the Dock — all of which unhide it) switches to that workspace instead
+    /// of leaving one stray window floating over the one you're in.
+    var followFocusedApp: Bool
 
     private enum CodingKeys: String, CodingKey {
         case version, profiles, floatingApps, hideUnassignedShortcut, applyLayoutShortcut
-        case nextWorkspaceShortcut, previousWorkspaceShortcut, snap
-        case menuBarIcon, showWorkspaceName
+        case nextWorkspaceShortcut, previousWorkspaceShortcut
+        case openSettingsShortcut, reloadConfigShortcut, snap
+        case menuBarIcon, showWorkspaceName, followFocusedApp
         /// v1 only, read for migration and never written back.
         case workspaces
     }
@@ -542,9 +550,12 @@ struct Config: Codable, Equatable {
         applyLayoutShortcut: Shortcut? = Shortcut(key: "l"),
         nextWorkspaceShortcut: Shortcut? = Shortcut(key: "p"),
         previousWorkspaceShortcut: Shortcut? = Shortcut(key: "n"),
+        openSettingsShortcut: Shortcut? = Shortcut(key: ","),
+        reloadConfigShortcut: Shortcut? = Shortcut(key: "r"),
         snap: SnapSettings = SnapSettings(),
         menuBarIcon: MenuBarIcon = .fallback,
-        showWorkspaceName: Bool = true
+        showWorkspaceName: Bool = true,
+        followFocusedApp: Bool = true
     ) {
         self.version = version
         self.profiles = profiles
@@ -553,9 +564,12 @@ struct Config: Codable, Equatable {
         self.applyLayoutShortcut = applyLayoutShortcut
         self.nextWorkspaceShortcut = nextWorkspaceShortcut
         self.previousWorkspaceShortcut = previousWorkspaceShortcut
+        self.openSettingsShortcut = openSettingsShortcut
+        self.reloadConfigShortcut = reloadConfigShortcut
         self.snap = snap
         self.menuBarIcon = menuBarIcon
         self.showWorkspaceName = showWorkspaceName
+        self.followFocusedApp = followFocusedApp
     }
 
     init(from decoder: Decoder) throws {
@@ -580,9 +594,12 @@ struct Config: Codable, Equatable {
         applyLayoutShortcut = try Self.shortcut(in: container, key: .applyLayoutShortcut, default: Shortcut(key: "l"))
         nextWorkspaceShortcut = try Self.shortcut(in: container, key: .nextWorkspaceShortcut, default: Shortcut(key: "p"))
         previousWorkspaceShortcut = try Self.shortcut(in: container, key: .previousWorkspaceShortcut, default: Shortcut(key: "n"))
+        openSettingsShortcut = try Self.shortcut(in: container, key: .openSettingsShortcut, default: Shortcut(key: ","))
+        reloadConfigShortcut = try Self.shortcut(in: container, key: .reloadConfigShortcut, default: Shortcut(key: "r"))
         snap = try container.decodeIfPresent(SnapSettings.self, forKey: .snap) ?? SnapSettings()
         menuBarIcon = try container.decodeIfPresent(MenuBarIcon.self, forKey: .menuBarIcon) ?? .fallback
         showWorkspaceName = try container.decodeIfPresent(Bool.self, forKey: .showWorkspaceName) ?? true
+        followFocusedApp = try container.decodeIfPresent(Bool.self, forKey: .followFocusedApp) ?? true
     }
 
     private static func shortcut(
@@ -604,6 +621,8 @@ struct Config: Codable, Equatable {
         try container.encode(applyLayoutShortcut, forKey: .applyLayoutShortcut)
         try container.encode(nextWorkspaceShortcut, forKey: .nextWorkspaceShortcut)
         try container.encode(previousWorkspaceShortcut, forKey: .previousWorkspaceShortcut)
+        try container.encode(openSettingsShortcut, forKey: .openSettingsShortcut)
+        try container.encode(reloadConfigShortcut, forKey: .reloadConfigShortcut)
         try container.encode(snap, forKey: .snap)
         try container.encode(menuBarIcon, forKey: .menuBarIcon)
         try container.encode(showWorkspaceName, forKey: .showWorkspaceName)

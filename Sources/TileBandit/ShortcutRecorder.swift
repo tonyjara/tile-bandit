@@ -39,7 +39,7 @@ final class ShortcutRecorder: ObservableObject {
     }
 
     /// Swallows every key while recording. Esc cancels; a supported key
-    /// (0-9, a-z) with at least one modifier completes; anything else is
+    /// (0-9, a-z, punctuation) with at least one modifier completes; anything else is
     /// ignored and we keep listening.
     private func handle(_ event: NSEvent) -> NSEvent? {
         if event.keyCode == 53 { // esc

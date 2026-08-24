@@ -10,16 +10,27 @@ import Foundation
 enum Banner {
     static let version = "0.1.0"
 
-    /// Raw string literals: the mascot's own `"""` would close an ordinary
-    /// multiline literal. Every line is padded to the same width so the text
-    /// column beside it lines up.
+    /// Raw string literals: the mascot's own `"""` (the bandana hem) would
+    /// close an ordinary literal, and his squint is full of `\`s that would
+    /// read as escapes. Lines are padded to a common width at print time.
     private static let mascot = [
-        #"   .-"""""""-.  "#,
-        #"  /  _     _  \ "#,
-        #" |  (o)===(o)  |"#,
-        #"  \     ^     / "#,
-        #"   '-.......-'  "#,
+        #"         _________     "#,
+        #"        /       o \    "#,
+        #"        |~~~~~~~~~|    "#,
+        #"     ___|_________|___ "#,
+        #"   _(_________________)_"#,
+        #"  (_____________________)"#,
+        #"       | \_o)   (o_/ |"#,
+        #"       .-'"""""""""'-."#,
+        #"        \ \/\/\/\/\ / "#,
+        #"         \ \/\/\/\ /  "#,
+        #"          \ \/\/\ /   "#,
+        #"           \ \/\ /    "#,
+        #"            '-.-'     "#,
     ]
+
+    /// The rows that are bandana fabric — tinted red on a colour terminal.
+    private static let bandanaRows = 7...12
 
     static func show() {
         let tty = isatty(STDOUT_FILENO) == 1
@@ -29,17 +40,23 @@ enum Banner {
         let bold = { style("1", $0) }
         let dim = { style("2", $0) }
 
-        let aside = [
-            "",
-            bold("Tile Bandit \(version)"),
-            dim("menu-bar workspace switcher"),
-            "",
-            "",
+        // Keyed by mascot row so the text block sits beside the brim and eyes.
+        let aside: [Int: String] = [
+            5: bold("Tile Bandit \(version)"),
+            6: dim("menu-bar workspace switcher"),
+            7: dim("wanted · for tile rustlin'"),
         ]
 
+        let width = mascot.map(\.count).max() ?? 0
         var out = "\n"
-        for (art, text) in zip(mascot, aside) {
-            out += "  \(dim(art))  \(text)\n"
+        for (i, line) in mascot.enumerated() {
+            let art = bandanaRows.contains(i) ? style("2;31", line) : dim(line)
+            if let text = aside[i] {
+                let pad = String(repeating: " ", count: width - line.count)
+                out += "  \(art)\(pad)  \(text)\n"
+            } else {
+                out += "  \(art)\n"
+            }
         }
 
         let config = ConfigStore.configFile.path

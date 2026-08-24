@@ -130,6 +130,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.engine.switchToPrevious()
             }
         }
+        if let shortcut = store.config.openSettingsShortcut {
+            hotkeys.register(shortcut) { [weak self] in
+                guard let self else { return }
+                self.keyDebugger.recordHotkeyFired(shortcut, action: "Open settings")
+                self.openSettings()
+            }
+        }
+        if let shortcut = store.config.reloadConfigShortcut {
+            hotkeys.register(shortcut) { [weak self] in
+                guard let self else { return }
+                self.keyDebugger.recordHotkeyFired(shortcut, action: "Reload config")
+                self.reloadConfig()
+            }
+        }
     }
 
     private func rebuildMenu() {
@@ -194,12 +208,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        let settings = NSMenuItem(title: "Settings…", action: #selector(openSettingsAction), keyEquivalent: ",")
+        let settings = NSMenuItem(title: "Settings…", action: #selector(openSettingsAction), keyEquivalent: "")
         settings.target = self
+        if let shortcut = store.config.openSettingsShortcut {
+            applyKeyEquivalent(shortcut, to: settings)
+        }
         menu.addItem(settings)
 
-        let reload = NSMenuItem(title: "Reload Config", action: #selector(reloadConfig), keyEquivalent: "r")
+        let reload = NSMenuItem(title: "Reload Config", action: #selector(reloadConfig), keyEquivalent: "")
         reload.target = self
+        if let shortcut = store.config.reloadConfigShortcut {
+            applyKeyEquivalent(shortcut, to: reload)
+        }
         menu.addItem(reload)
 
         menu.addItem(.separator())

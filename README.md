@@ -1,11 +1,19 @@
 # Tile Bandit
 
 ```
-      .-"""""""-.
-     /  _     _  \
-    |  (o)===(o)  |    Tile Bandit
-     \     ^     /     menu-bar workspace switcher
-      '-.......-'
+         _________
+        /       o \
+        |~~~~~~~~~|
+     ___|_________|___
+   _(_________________)_
+  (_____________________)   Tile Bandit
+       | \_o)   (o_/ |      menu-bar workspace switcher
+       .-'"""""""""'-.      wanted · for tile rustlin'
+        \ \/\/\/\/\ /
+         \ \/\/\/\ /
+          \ \/\/\ /
+           \ \/\ /
+            '-.-'
 ```
 
 A fast, keyboard-driven workspace switcher for macOS that lives in your menu bar.

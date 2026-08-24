@@ -99,7 +99,7 @@ final class KeyDebugger: ObservableObject {
             verdict = "Add a modifier (⌃⌥⇧⌘) — bare keys can't be global shortcuts."
             usable = false
         } else if !supported {
-            verdict = "Key not in the supported set (0–9, a–z) yet."
+            verdict = "Key not in the supported set (0–9, a–z, punctuation) yet."
             usable = false
         } else {
             verdict = "Usable as a shortcut."

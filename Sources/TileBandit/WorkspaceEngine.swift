@@ -38,6 +38,18 @@ final class WorkspaceEngine {
     private var lastFocusedApp: [UUID: String] = [:]
     private var activationObserver: NSObjectProtocol?
 
+    /// Follow-focus decides a beat *after* an activation rather than on the
+    /// notification itself, and asks what is frontmost then. Two reasons:
+    /// hiding apps makes macOS hand focus around, so a switch arrives as a
+    /// burst of activations that would otherwise be chased; and an app
+    /// unhidden by Cmd-Tab or the Dock can still report `isHidden` at the
+    /// instant it activates, since that flag reaches us on its own schedule.
+    /// Coalescing the burst and reading `frontmostApplication` sidesteps both
+    /// races — whatever survives to the end of the burst is what the user is
+    /// actually looking at.
+    private var followCheck: DispatchWorkItem?
+    private static let followSettleDelay: TimeInterval = 0.2
+
     var activeWorkspace: Workspace? {
         store.workspaces.first { $0.id == activeWorkspaceID }
     }
@@ -54,6 +66,7 @@ final class WorkspaceEngine {
     }
 
     deinit {
+        followCheck?.cancel()
         if let activationObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
         }
@@ -165,14 +178,58 @@ final class WorkspaceEngine {
 
     /// Whenever an app belonging to the active workspace becomes frontmost,
     /// remember it as that workspace's focus target. Floating and unassigned
-    /// apps never overwrite the memory.
+    /// apps never overwrite the memory. Every activation also restarts the
+    /// follow-focus timer, so the decision is taken once the dust settles.
     private func recordActivation(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              let bundleId = app.bundleIdentifier,
-              let workspace = activeWorkspace,
-              workspace.apps.contains(where: { $0.bundleId == bundleId })
+              let bundleId = app.bundleIdentifier
         else { return }
-        lastFocusedApp[workspace.id] = bundleId
+
+        if let workspace = activeWorkspace,
+           workspace.apps.contains(where: { $0.bundleId == bundleId }) {
+            lastFocusedApp[workspace.id] = bundleId
+        }
+
+        scheduleFollowCheck()
+    }
+
+    /// Restart the settle timer. A burst of activations therefore produces one
+    /// check, `followSettleDelay` after the last of them.
+    private func scheduleFollowCheck() {
+        guard store.config.followFocusedApp else { return }
+        followCheck?.cancel()
+        let check = DispatchWorkItem { [weak self] in self?.followFocus() }
+        followCheck = check
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.followSettleDelay, execute: check)
+    }
+
+    /// The app the user settled on lives in another workspace: switch there,
+    /// so Cmd-Tab / Spotlight / a Dock click bring the whole workspace along
+    /// instead of leaving one window stranded over the current one.
+    ///
+    /// Reads the frontmost app rather than trusting the notification that
+    /// scheduled this — by now the churn from any hiding has played out, and
+    /// what's in front is what the user meant to reach. Floating apps belong
+    /// everywhere, so they never pull you away.
+    private func followFocus() {
+        guard store.config.followFocusedApp,
+              let bundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+              !floatingIDs().contains(bundleId)
+        else { return }
+
+        // Already where it belongs — this covers the tail of our own switches,
+        // which end by focusing an app in the workspace just switched to.
+        if let workspace = activeWorkspace,
+           workspace.apps.contains(where: { $0.bundleId == bundleId }) { return }
+
+        guard let target = store.workspaces.first(where: { workspace in
+            workspace.apps.contains { $0.bundleId == bundleId }
+        }), target.id != activeWorkspaceID else { return }
+
+        // Land on the app the user actually reached for rather than wherever
+        // focus happened to be the last time this workspace was up.
+        lastFocusedApp[target.id] = bundleId
+        switchTo(target.id)
     }
 
     // MARK: - Helpers
