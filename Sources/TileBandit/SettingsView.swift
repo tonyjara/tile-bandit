@@ -353,7 +353,11 @@ struct WorkspaceDetail: View {
             parts.append("Menu bar → Apply Grid Layout moves this workspace's apps to the display they're placed on and resizes them to their cells.")
         }
         if config.snap.enabled, config.snap.hasModifiers {
-            parts.append("Hold \(config.snap.modifierDisplay) while dragging any window to snap it to that display's grid.")
+            var snap = "Hold \(config.snap.modifierDisplay) while dragging any window to snap it to the cell under the cursor."
+            if let span = config.snap.spanModifierDisplay {
+                snap += " Add \(span) to span several cells."
+            }
+            parts.append(snap)
         }
         return parts.joined(separator: " ")
     }
@@ -901,6 +905,8 @@ struct ShortcutsTab: View {
                 Section("General") {
                     shortcutRow("Hide unassigned apps", $store.config.hideUnassignedShortcut, id: "hide-unassigned")
                     shortcutRow("Apply grid layout (active workspace)", $store.config.applyLayoutShortcut, id: "apply-layout")
+                    shortcutRow("Maximize focused window (while held)", $store.config.maximizeHoldShortcut, id: "maximize-hold")
+                    shortcutRow("Maximize focused window", $store.config.maximizeShortcut, id: "maximize")
                     shortcutRow("Next workspace", $store.config.nextWorkspaceShortcut, id: "next-workspace")
                     shortcutRow("Previous workspace", $store.config.previousWorkspaceShortcut, id: "previous-workspace")
                     shortcutRow("Open settings", $store.config.openSettingsShortcut, id: "open-settings")
@@ -925,6 +931,10 @@ struct ShortcutsTab: View {
                             Text("Pick at least one modifier — snapping stays off without one.")
                                 .font(.caption)
                                 .foregroundStyle(.orange)
+                        } else if let span = store.config.snap.spanModifierDisplay {
+                            Text("A drag snaps to the single cell under the cursor; hold \(span) as well to span several.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                         HStack(spacing: 16) {
                             Text("Grid when no workspace is active:")

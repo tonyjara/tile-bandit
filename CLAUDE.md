@@ -92,7 +92,13 @@ sourcekit-lsp, which understands SPM natively).
 - `WorkspaceEngine.swift` — switching = unhide target apps → hide everything
   else (floating apps excepted) → activate the workspace's last-focused app
   (tracked in-memory via `didActivateApplicationNotification`; falls back to
-  the first app). `switchToNext()`/`switchToPrevious()` cycle in config order
+  the first app). Both the hide and the unhide are issued *unconditionally*,
+  never gated on `NSRunningApplication.isHidden`: that property is a cache
+  AppKit refreshes asynchronously, so an app the user brought back by a route
+  we never hear about (a notification banner, the Dock, Mission Control) can
+  still read `isHidden == true` and get skipped — it then sits over the grid
+  through switch after switch. Redundant hide/unhide calls are no-ops.
+  `switchToNext()`/`switchToPrevious()` cycle in config order
   with wrap-around (default hotkeys ⌥P = next, ⌥N = previous — per owner's
   explicit request, note it's inverted from the emacs n/p convention).
   **Switching never moves windows** — that invariant is why
@@ -114,6 +120,9 @@ sourcekit-lsp, which understands SPM natively).
   activations (coalesced into one check, which then sees our own focusApp's
   app and does nothing), and an app unhidden by Cmd-Tab can still report
   `isHidden` at the moment it activates. Floating apps never pull you away.
+  With no active workspace (fresh launch, or a profile adoption that landed
+  nowhere) follow-focus only fires when the app is in exactly one workspace —
+  in several it's ambiguous, so it stays put instead of picking config order.
   The app is written into `lastFocusedApp` before switching so focus lands
   on what the user reached for, not on that workspace's previous focus.
   `hideUnassignedApps()` is the cleanup action (default hotkey ⌥0, menu item,
@@ -135,11 +144,25 @@ sourcekit-lsp, which understands SPM natively).
   else — nothing attached matches, e.g. a profile forced from the menu for a
   desk you aren't at — the window's current screen, so the action tiles
   something rather than appearing broken.
+  Also home to `MaximizeHold` (hold ⌥M by default): press fills the focused
+  window's screen `visibleFrame`, release restores the saved frame. A peek,
+  not a layout change — nothing is written to the config. No menu item (a
+  menu can't express "while held"). AppDelegate calls `end()` whenever it
+  tears hotkeys down (config change, shortcut recording), because the Carbon
+  released event dies with the registration and the window would otherwise
+  stay stuck maximized. `stick()` is the sticky sibling (⌥⇧M): maximize and
+  leave it — it drops the saved frame first, so it also *commits* a live
+  peek rather than fighting its release.
 - `SnapManager.swift` — bentobox drag-snap: *global mouse* NSEvent monitors
   (mouse monitors are permission-free; global *key* monitors would need
   Accessibility) watch drags; holding the configured modifiers (default ⌃⌥)
   while dragging a window shows a `GridOverlayWindow` and the window snaps to
-  the highlighted cells on release — drag across cells to span them. Arms only
+  the highlighted cells on release. The highlight is the *single cell under the
+  cursor*; spanning needs the span modifier held too (`SnapSettings.spanModifier`
+  — the first of ⇧⌘⌃⌥ the snap combo hasn't claimed, so ⇧ by default), and the
+  span anchors where that modifier went down. Anchoring at the drag *start*
+  instead — the original design — meant any move across a cell boundary spanned
+  two cells and a single cell was unreachable. Arms only
   after the window's AX position actually changes, so modifier-drags inside
   window content (e.g. ⌥-select in a terminal) never snap. Uses the active
   workspace's grid *for the display being dragged on*, re-read when the drag
@@ -148,6 +171,9 @@ sourcekit-lsp, which understands SPM natively).
   on engage and screen-crossing only, never per mouse event.
 - `HotkeyManager.swift` — Carbon `RegisterEventHotKey` (chosen over
   CGEventTap/NSEvent monitors specifically because it needs no permission).
+  Handles `kEventHotKeyReleased` too: `register(_:pressed:released:)` is the
+  hold-style variant (MaximizeHold uses it); Carbon fires released when the
+  combo breaks whichever of the key or modifier goes up first.
   Refuses shortcuts without modifiers. `keyCodes` is the whole supported key
   set — 0-9, a-z plus common punctuation (`,` is there so ⌥, can be the
   Settings shortcut, matching the macOS convention); KeyDebugger's verdict and

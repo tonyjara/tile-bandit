@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotkeys = HotkeyManager()
     private let keyDebugger = KeyDebugger()
     private let shortcutRecorder = ShortcutRecorder()
+    private let maximizeHold = MaximizeHold()
 
     private var statusItem: NSStatusItem!
     private var settingsWindow: NSWindow?
@@ -58,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 if recording {
                     self.hotkeys.unregisterAll()
+                    self.maximizeHold.end()
                 } else {
                     self.registerHotkeys()
                 }
@@ -92,6 +94,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func registerHotkeys() {
         hotkeys.unregisterAll()
+        // If a hold was live, its release event died with the registration —
+        // restore now rather than leaving the window stuck maximized.
+        maximizeHold.end()
         for workspace in store.workspaces {
             guard let shortcut = workspace.shortcut else { continue }
             let id = workspace.id
@@ -114,6 +119,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.keyDebugger.recordHotkeyFired(shortcut, action: "Apply grid layout")
                 self.applyActiveLayout()
+            }
+        }
+        if let shortcut = store.config.maximizeHoldShortcut {
+            hotkeys.register(shortcut, pressed: { [weak self] in
+                guard let self else { return }
+                self.keyDebugger.recordHotkeyFired(shortcut, action: "Maximize focused window (while held)")
+                self.maximizeHold.begin()
+            }, released: { [weak self] in
+                self?.maximizeHold.end()
+            })
+        }
+        if let shortcut = store.config.maximizeShortcut {
+            hotkeys.register(shortcut) { [weak self] in
+                guard let self else { return }
+                self.keyDebugger.recordHotkeyFired(shortcut, action: "Maximize focused window")
+                self.maximizeHold.stick()
             }
         }
         if let shortcut = store.config.nextWorkspaceShortcut {

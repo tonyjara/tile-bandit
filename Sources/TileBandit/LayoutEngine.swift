@@ -47,6 +47,15 @@ enum AX {
         }
     }
 
+    /// The window an app considers focused (what hold-to-maximize acts on).
+    static func focusedWindow(pid: pid_t) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(pid)
+        guard let ref = copyValue(app, kAXFocusedWindowAttribute),
+              CFGetTypeID(ref) == AXUIElementGetTypeID()
+        else { return nil }
+        return (ref as! AXUIElement)
+    }
+
     /// Window frame in AppKit coordinates.
     static func frame(of window: AXUIElement) -> CGRect? {
         guard let axFrame = axFrame(of: window) else { return nil }
@@ -177,6 +186,53 @@ enum AX {
 
     private static func area(_ rect: CGRect) -> CGFloat {
         rect.isNull ? 0 : rect.width * rect.height
+    }
+}
+
+/// Hold-to-maximize (default ⌥M): while the hotkey is held, the focused
+/// window fills its screen's visible frame; releasing puts it back exactly
+/// where it was. A peek, not a layout change — nothing touches the config,
+/// and it needs the same Accessibility grant as the rest of the tiling.
+final class MaximizeHold {
+    private var restore: (window: AXUIElement, frame: CGRect)?
+
+    func begin() {
+        // Already holding (a key auto-repeat re-fires pressed): keep the
+        // original frame, or release would restore to the maximized one.
+        guard restore == nil else { return }
+        guard AccessibilityPermission.isGranted else {
+            AccessibilityPermission.request()
+            return
+        }
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              let window = AX.focusedWindow(pid: app.processIdentifier),
+              let frame = AX.frame(of: window),
+              let screen = AX.screenOf(window) ?? NSScreen.main
+        else { return }
+        restore = (window, frame)
+        AX.setFrame(window, to: screen.visibleFrame)
+    }
+
+    func end() {
+        guard let saved = restore else { return }
+        restore = nil
+        AX.setFrame(saved.window, to: saved.frame)
+    }
+
+    /// Sticky variant (default ⌥⇧M): maximize and leave it there. Dropping the
+    /// saved frame first also commits a live peek — if the user re-presses with
+    /// ⇧ added mid-hold, the release that follows has nothing to restore.
+    func stick() {
+        restore = nil
+        guard AccessibilityPermission.isGranted else {
+            AccessibilityPermission.request()
+            return
+        }
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              let window = AX.focusedWindow(pid: app.processIdentifier),
+              let screen = AX.screenOf(window) ?? NSScreen.main
+        else { return }
+        AX.setFrame(window, to: screen.visibleFrame)
     }
 }
 

@@ -7,16 +7,30 @@ import Foundation
 /// Accessibility / Input Monitoring permission. RegisterEventHotKey is old but
 /// fully supported and needs no permission at all.
 final class HotkeyManager {
+    private struct Handlers {
+        let pressed: () -> Void
+        let released: (() -> Void)?
+    }
+
     private var registered: [EventHotKeyRef] = []
-    private var handlers: [UInt32: () -> Void] = [:]
+    private var handlers: [UInt32: Handlers] = [:]
     private var nextID: UInt32 = 1
     private var eventHandler: EventHandlerRef?
 
     init() {
-        var spec = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
+        // Released events too, for hold-style shortcuts (act while held,
+        // undo on release). Carbon fires released when the combo breaks,
+        // whether the key or the modifier goes up first.
+        let specs = [
+            EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyPressed)
+            ),
+            EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyReleased)
+            ),
+        ]
         InstallEventHandler(
             GetApplicationEventTarget(),
             { _, event, userData in
@@ -32,11 +46,15 @@ final class HotkeyManager {
                     &hotKeyID
                 )
                 let manager = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
-                manager.handlers[hotKeyID.id]?()
+                if GetEventKind(event) == UInt32(kEventHotKeyReleased) {
+                    manager.handlers[hotKeyID.id]?.released?()
+                } else {
+                    manager.handlers[hotKeyID.id]?.pressed()
+                }
                 return noErr
             },
-            1,
-            &spec,
+            specs.count,
+            specs,
             Unmanaged.passUnretained(self).toOpaque(),
             &eventHandler
         )
@@ -52,6 +70,12 @@ final class HotkeyManager {
     /// (a bare key would swallow normal typing system-wide).
     @discardableResult
     func register(_ shortcut: Shortcut, handler: @escaping () -> Void) -> Bool {
+        register(shortcut, pressed: handler, released: nil)
+    }
+
+    /// Hold-style variant: `released` fires when the combo is let go.
+    @discardableResult
+    func register(_ shortcut: Shortcut, pressed: @escaping () -> Void, released: (() -> Void)?) -> Bool {
         guard let keyCode = Self.keyCodes[shortcut.key.lowercased()] else { return false }
 
         var modifiers: UInt32 = 0
@@ -76,7 +100,7 @@ final class HotkeyManager {
         guard status == noErr, let ref else { return false }
 
         registered.append(ref)
-        handlers[id] = handler
+        handlers[id] = Handlers(pressed: pressed, released: released)
         return true
     }
 

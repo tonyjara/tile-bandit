@@ -519,6 +519,11 @@ struct Config: Codable, Equatable {
     var floatingApps: [AppRef]
     var hideUnassignedShortcut: Shortcut?
     var applyLayoutShortcut: Shortcut?
+    /// Hold to fill the screen with the focused window, release to put it
+    /// back — a peek, not a layout change (nothing is persisted).
+    var maximizeHoldShortcut: Shortcut?
+    /// The sticky sibling: fill the screen and leave it that way.
+    var maximizeShortcut: Shortcut?
     var nextWorkspaceShortcut: Shortcut?
     var previousWorkspaceShortcut: Shortcut?
     var openSettingsShortcut: Shortcut?
@@ -535,6 +540,7 @@ struct Config: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case version, profiles, floatingApps, hideUnassignedShortcut, applyLayoutShortcut
+        case maximizeHoldShortcut, maximizeShortcut
         case nextWorkspaceShortcut, previousWorkspaceShortcut
         case openSettingsShortcut, reloadConfigShortcut, snap
         case menuBarIcon, showWorkspaceName, followFocusedApp
@@ -548,6 +554,8 @@ struct Config: Codable, Equatable {
         floatingApps: [AppRef] = [],
         hideUnassignedShortcut: Shortcut? = Shortcut(key: "0"),
         applyLayoutShortcut: Shortcut? = Shortcut(key: "l"),
+        maximizeHoldShortcut: Shortcut? = Shortcut(key: "m"),
+        maximizeShortcut: Shortcut? = Shortcut(key: "m", shift: true),
         nextWorkspaceShortcut: Shortcut? = Shortcut(key: "p"),
         previousWorkspaceShortcut: Shortcut? = Shortcut(key: "n"),
         openSettingsShortcut: Shortcut? = Shortcut(key: ","),
@@ -562,6 +570,8 @@ struct Config: Codable, Equatable {
         self.floatingApps = floatingApps
         self.hideUnassignedShortcut = hideUnassignedShortcut
         self.applyLayoutShortcut = applyLayoutShortcut
+        self.maximizeHoldShortcut = maximizeHoldShortcut
+        self.maximizeShortcut = maximizeShortcut
         self.nextWorkspaceShortcut = nextWorkspaceShortcut
         self.previousWorkspaceShortcut = previousWorkspaceShortcut
         self.openSettingsShortcut = openSettingsShortcut
@@ -592,6 +602,8 @@ struct Config: Codable, Equatable {
         // null means the user chose "None", so keep it nil.
         hideUnassignedShortcut = try Self.shortcut(in: container, key: .hideUnassignedShortcut, default: Shortcut(key: "0"))
         applyLayoutShortcut = try Self.shortcut(in: container, key: .applyLayoutShortcut, default: Shortcut(key: "l"))
+        maximizeHoldShortcut = try Self.shortcut(in: container, key: .maximizeHoldShortcut, default: Shortcut(key: "m"))
+        maximizeShortcut = try Self.shortcut(in: container, key: .maximizeShortcut, default: Shortcut(key: "m", shift: true))
         nextWorkspaceShortcut = try Self.shortcut(in: container, key: .nextWorkspaceShortcut, default: Shortcut(key: "p"))
         previousWorkspaceShortcut = try Self.shortcut(in: container, key: .previousWorkspaceShortcut, default: Shortcut(key: "n"))
         openSettingsShortcut = try Self.shortcut(in: container, key: .openSettingsShortcut, default: Shortcut(key: ","))
@@ -619,6 +631,8 @@ struct Config: Codable, Equatable {
         // Encoded explicitly (null for "None") so reloads don't resurrect the defaults.
         try container.encode(hideUnassignedShortcut, forKey: .hideUnassignedShortcut)
         try container.encode(applyLayoutShortcut, forKey: .applyLayoutShortcut)
+        try container.encode(maximizeHoldShortcut, forKey: .maximizeHoldShortcut)
+        try container.encode(maximizeShortcut, forKey: .maximizeShortcut)
         try container.encode(nextWorkspaceShortcut, forKey: .nextWorkspaceShortcut)
         try container.encode(previousWorkspaceShortcut, forKey: .previousWorkspaceShortcut)
         try container.encode(openSettingsShortcut, forKey: .openSettingsShortcut)
@@ -626,5 +640,6 @@ struct Config: Codable, Equatable {
         try container.encode(snap, forKey: .snap)
         try container.encode(menuBarIcon, forKey: .menuBarIcon)
         try container.encode(showWorkspaceName, forKey: .showWorkspaceName)
+        try container.encode(followFocusedApp, forKey: .followFocusedApp)
     }
 }

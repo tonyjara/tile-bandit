@@ -2,8 +2,9 @@ import AppKit
 import SwiftUI
 
 /// Bentobox-style drag snapping: hold the configured modifiers while dragging
-/// a window and a grid overlay appears; the cells under the drag highlight
-/// (drag across several to span them) and the window snaps there on release.
+/// a window and a grid overlay appears; the cell under the cursor highlights
+/// and the window snaps there on release. Adding the span modifier (whatever
+/// `SnapSettings.spanModifier` leaves free, ⇧ by default) paints across cells.
 ///
 /// Watches drags with *global mouse* NSEvent monitors — mouse monitors need
 /// no permission (only key monitors require Accessibility). The AX calls that
@@ -36,7 +37,12 @@ final class SnapManager {
         /// another screen, since each display has its own in a workspace.
         var grid: GridSize
         var screen: NSScreen
-        var anchor: GridCell
+        /// Where a multi-cell span started: set when the span modifier goes
+        /// down, cleared when it comes up. Nil (the common case) means the
+        /// highlight is just the cell under the cursor — anchoring at the
+        /// *drag start* instead would make every move across a boundary a
+        /// two-cell span, leaving a single cell unreachable.
+        var spanAnchor: GridCell?
         var region: GridRegion
     }
 
@@ -74,12 +80,13 @@ final class SnapManager {
         }
 
         let location = NSEvent.mouseLocation
+        let spanning = store.config.snap.isSpanning(event.modifierFlags)
         if session != nil {
-            updateSession(at: location)
+            updateSession(at: location, spanning: spanning)
         } else if let pending {
             if let origin = AX.axFrame(of: pending.window)?.origin,
                abs(origin.x - pending.initialOrigin.x) > 1 || abs(origin.y - pending.initialOrigin.y) > 1 {
-                engage(pending.window, at: location)
+                engage(pending.window, at: location, spanning: spanning)
             }
         } else {
             guard ensurePermission(), let window = AX.movableWindow(at: location) else { return }
@@ -99,27 +106,40 @@ final class SnapManager {
 
     // MARK: - Session lifecycle
 
-    private func engage(_ window: AXUIElement, at location: CGPoint) {
+    private func engage(_ window: AXUIElement, at location: CGPoint, spanning: Bool) {
         guard let screen = screenAt(location) else { return }
         let grid = currentGrid(on: screen)
-        let anchor = grid.cell(at: location, in: screen.visibleFrame)
-        let region = GridRegion.bounding(anchor, anchor)
+        let cell = grid.cell(at: location, in: screen.visibleFrame)
+        let region = GridRegion.bounding(cell, cell)
         pending = nil
-        session = SnapSession(window: window, grid: grid, screen: screen, anchor: anchor, region: region)
+        session = SnapSession(
+            window: window,
+            grid: grid,
+            screen: screen,
+            spanAnchor: spanning ? cell : nil,
+            region: region
+        )
         overlay.show(GridOverlaySpec(columns: grid.columns, rows: grid.rows, highlight: region), on: screen)
     }
 
-    private func updateSession(at location: CGPoint) {
+    private func updateSession(at location: CGPoint, spanning: Bool) {
         guard var session else { return }
+        var crossedScreens = false
         if let screen = screenAt(location), screen.frame != session.screen.frame {
             // Crossed onto another display: that display has its own grid in
-            // this workspace, so pick it up before re-anchoring.
+            // this workspace, so pick it up — and drop any span anchor, which
+            // was a cell in a grid that no longer applies.
             session.screen = screen
             session.grid = currentGrid(on: screen)
-            session.anchor = session.grid.cell(at: location, in: screen.visibleFrame)
+            crossedScreens = true
         }
         let current = session.grid.cell(at: location, in: session.screen.visibleFrame)
-        session.region = .bounding(session.anchor, current)
+        if spanning {
+            if session.spanAnchor == nil || crossedScreens { session.spanAnchor = current }
+        } else {
+            session.spanAnchor = nil
+        }
+        session.region = .bounding(session.spanAnchor ?? current, current)
         self.session = session
         overlay.show(
             GridOverlaySpec(columns: session.grid.columns, rows: session.grid.rows, highlight: session.region),
@@ -171,6 +191,32 @@ extension SnapSettings {
         if shift { flags.insert(.shift) }
         if command { flags.insert(.command) }
         return flags
+    }
+
+    /// Modifiers in preference order, paired with whether the snap combo has
+    /// already claimed them. Shared by the flag and its display symbol so the
+    /// hint text can never name a different key than the one that works.
+    private static let spanCandidates: [(flag: NSEvent.ModifierFlags, symbol: String, used: (SnapSettings) -> Bool)] = [
+        (.shift, "⇧", { $0.shift }),
+        (.command, "⌘", { $0.command }),
+        (.control, "⌃", { $0.control }),
+        (.option, "⌥", { $0.option }),
+    ]
+
+    /// Held *on top of* the snap modifiers to paint a span. It has to be one
+    /// the snap combo doesn't already use, or every drag would be a span —
+    /// nil when all four are taken, which just means single-cell snapping.
+    var spanModifier: NSEvent.ModifierFlags? {
+        Self.spanCandidates.first { !$0.used(self) }?.flag
+    }
+
+    var spanModifierDisplay: String? {
+        Self.spanCandidates.first { !$0.used(self) }?.symbol
+    }
+
+    func isSpanning(_ flags: NSEvent.ModifierFlags) -> Bool {
+        guard let spanModifier else { return false }
+        return flags.intersection(.deviceIndependentFlagsMask).contains(spanModifier)
     }
 }
 

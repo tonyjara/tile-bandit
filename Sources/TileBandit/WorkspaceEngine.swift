@@ -84,7 +84,9 @@ final class WorkspaceEngine {
             if instances.isEmpty {
                 if workspace.launchMissingApps { launch(ref) }
             } else {
-                for app in instances where app.isHidden { app.unhide() }
+                // Unconditional, for the same reason as hideApps: a cached
+                // `isHidden` that says "already up" would leave the app hidden.
+                for app in instances { app.unhide() }
             }
         }
 
@@ -222,9 +224,17 @@ final class WorkspaceEngine {
         if let workspace = activeWorkspace,
            workspace.apps.contains(where: { $0.bundleId == bundleId }) { return }
 
-        guard let target = store.workspaces.first(where: { workspace in
+        let owners = store.workspaces.filter { workspace in
             workspace.apps.contains { $0.bundleId == bundleId }
-        }), target.id != activeWorkspaceID else { return }
+        }
+
+        // With no active workspace (fresh launch, or a profile adoption that
+        // found nothing to land on), an app assigned to several workspaces is
+        // ambiguous — don't guess, or the first click would jump to whichever
+        // workspace happens to list it first in config order.
+        if activeWorkspace == nil, owners.count != 1 { return }
+
+        guard let target = owners.first, target.id != activeWorkspaceID else { return }
 
         // Land on the app the user actually reached for rather than wherever
         // focus happened to be the last time this workspace was up.
@@ -242,13 +252,23 @@ final class WorkspaceEngine {
         Set(store.config.floatingApps.map(\.bundleId))
     }
 
+    /// Hides everything outside `allowed`.
+    ///
+    /// Deliberately unconditional. `NSRunningApplication.isHidden` is a cached
+    /// property AppKit refreshes asynchronously, so an app the user brought
+    /// back by some route we never hear about — a notification banner, the
+    /// Dock, Mission Control — can still read `isHidden == true` here long
+    /// after it's on screen. Asking first meant that app was skipped and sat
+    /// over the grid through switch after switch ("I'm in C but WhatsApp is
+    /// still there, covering Ghostty"). `hide()` on an app that really is
+    /// hidden is a no-op, so the check bought nothing and cost correctness.
     private func hideApps(in running: [NSRunningApplication], keeping allowed: Set<String>) {
         for app in running {
             guard let bundleId = app.bundleIdentifier,
                   app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
                   !allowed.contains(bundleId)
             else { continue }
-            if !app.isHidden { app.hide() }
+            app.hide()
         }
     }
 
