@@ -50,7 +50,11 @@ final class ConfigStore: ObservableObject {
     private static func read() -> Config? {
         guard let data = try? Data(contentsOf: configFile) else { return nil }
         do {
-            return try JSONDecoder().decode(Config.self, from: data)
+            let decoder = JSONDecoder()
+            // ISO-8601 rather than the default seconds-since-2001 double, so
+            // a keyboard profile's modifiedAt reads as a date in the file.
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(Config.self, from: data)
         } catch {
             NSLog("TileBandit: failed to parse config at \(configFile.path): \(error)")
             return nil
@@ -62,6 +66,7 @@ final class ConfigStore: ObservableObject {
             try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            encoder.dateEncodingStrategy = .iso8601
             try encoder.encode(config).write(to: configFile, options: .atomic)
         } catch {
             NSLog("TileBandit: failed to save config: \(error)")

@@ -17,7 +17,9 @@ sourcekit-lsp, which understands SPM natively).
   printed to stdout at launch. Only visible on a terminal launch (`swift run`);
   a Finder-launched `.app` has nowhere to print. The art uses raw string
   literals (`#"""…"""#`) because the mascot itself contains `"""`, and ANSI
-  styling is applied only when stdout `isatty`.
+  styling is applied only when stdout `isatty`. Also lists the detected
+  keyboards — the one piece of hardware whose detection you can't confirm by
+  looking at the screen.
 - `AppDelegate.swift` — status item + menu; subscribes to config changes and
   re-registers hotkeys / rebuilds the menu (debounced via Combine). Also owns
   `DisplayProfileManager`: a profile change re-registers hotkeys and rebuilds
@@ -35,6 +37,12 @@ sourcekit-lsp, which understands SPM natively).
   than in Models so the model layer stays AppKit-free; `resolvedImage` falls
   back to the default and `available` filters the picker, so a symbol this
   macOS lacks can never leave a blank, unclickable status item.
+  Owns `KeyboardManager` and `KeyModEngine` too; a keyboard coming or going
+  doesn't touch workspaces or hotkeys, so it reapplies key modifications on its
+  own rather than through `applyConfig()`. `applicationWillTerminate` clears
+  them: key modifications are the one thing this app leaves *on the machine*
+  rather than in its own process, and a carrier key with nothing left to
+  interpret it would be a dead key.
 - `Models.swift` — `Config`/`DisplayProfile`/`DisplayRef`/`Workspace`/`AppRef`/
   `Shortcut` plus the grid types (`DisplayGrid`/`GridRegion`/`GridCell`/
   `GridSize`/`SnapSettings`) and `MenuBarIcon` (raw values *are* SF Symbol
@@ -56,13 +64,30 @@ sourcekit-lsp, which understands SPM natively).
   and Displays-tab binding all avoid dropping a placement; `DisplayProfile.bind(to:)`
   is the profile-level wrapper and should be preferred over assigning
   `displays` directly.
-  `Config.currentVersion` is 3. Decoding *is* the migration: a v1 file (flat
+  The key-modification types live here too — `ModifierSet` (encoded as names,
+  `"hyper"` accepted as shorthand for all four), `KeyRef` (a key by its
+  `HIDKeys` name, resolved on use so an unknown name disables one mapping
+  instead of breaking the decode), `KeyMapping`, `KeyChord`, `KeyboardRef` and
+  `KeyboardProfile`. A `KeyChord` rewrites one key-plus-modifiers into another
+  (or into nothing, which is how a combination gets *disabled*). They live in
+  two places for a reason: inside `KeyMapping.chords` they're the layer a hold
+  opens and are device-scoped for free, because the hold gating them is;
+  in `Config.chords` they're global and honestly so, since a plain keypress
+  carries no device identity an event tap can read. `ModifierSet.function`
+  (`fn`) is send-only — it can emit fn+F11 but is never matched on, because the
+  laptop keyboard raises it on its own in ways that would make an exact match
+  unpredictable. `KeyboardProfile.modifiedAt` is rounded to whole seconds
+  because that's all the ISO-8601 the config is written in can hold; without it
+  a profile stops being equal to itself once saved, and `removeDuplicates` would
+  see a change on every reload.
+  `Config.currentVersion` is 4. Decoding *is* the migration: a v1 file (flat
   `workspaces`) becomes a single *unbound* profile, which the first detection
   run adopts onto whatever displays are attached; a v2 workspace's single
   `gridColumns`/`gridRows`/`layout` becomes one unbound `DisplayGrid`, which
   `DisplayProfile.init(from:)` hands to *every* display in the setup (copying
   beats guessing which monitor was meant — the user deletes what doesn't
-  belong). `version` is normalised in memory and the legacy keys are dropped on
+  belong). A v3 file simply has no `keyboards`, which decodes to none.
+  `version` is normalised in memory and the legacy keys are dropped on
   the next write.
 - `DisplayProfiles.swift` — display-setup detection. `DisplayIdentity` builds a
   stable per-screen key (built-in → `builtin`; externals → EDID
@@ -81,7 +106,8 @@ sourcekit-lsp, which understands SPM natively).
   lookup — how a stored `DisplayGrid` finds the monitor it was drawn for, using
   the same "#n" suffixing as `snapshot()`.
 - `ConfigStore.swift` — ObservableObject; JSON at
-  `~/.config/tilebandit/config.json`; debounced autosave. Also holds the
+  `~/.config/tilebandit/config.json`; debounced autosave (dates ISO-8601, so a
+  keyboard profile's `modifiedAt` reads as a date in the file). Also holds the
   non-persisted `activeProfileID` (derived from the hardware) and the
   `workspaces` lens onto the live profile — everything outside Settings reads
   `store.workspaces`, never `config.profiles`. Settings does reach into
@@ -178,14 +204,21 @@ sourcekit-lsp, which understands SPM natively).
   set — 0-9, a-z plus common punctuation (`,` is there so ⌥, can be the
   Settings shortcut, matching the macOS convention); KeyDebugger's verdict and
   ShortcutRecorder's accepted keys both derive from it.
-- `KeyDebugger.swift` — key-press debugger for the Shortcuts tab. Uses a
-  *local* NSEvent monitor (permission-free; a global monitor would need
-  Accessibility). Persistent: only the Stop button stops it. Consumes keyDown
-  events only while the Shortcuts tab is visible (`shortcutsTabVisible`).
-  Hotkeys stay registered while it runs — the hotkey handlers report firings
-  via `recordHotkeyFired` since Carbon consumes those events before NSEvent
-  monitors see them. Passes events through untouched while ShortcutRecorder
-  is capturing (`shouldPassThrough`).
+- `KeyDebugger.swift` — key-press debugger, shown on the Key Modifications tab
+  (it started on Shortcuts, and moved once key modifications existed: "what key
+  is this, really?" is the question you ask right before remapping one, and far
+  less often about a hotkey). Uses a *local* NSEvent monitor (permission-free;
+  a global monitor would need Accessibility). Persistent: only the Stop button
+  stops it. Consumes keyDown events only while its own tab is visible
+  (`debuggerTabVisible`) — and never when the first responder is an NSTextView,
+  since that tab has editable fields and typing has to keep working. Its
+  verdict answers two questions at once, because a key can be remappable
+  (`HIDKeys`) without being usable as a global shortcut: a bare key is exactly
+  that, and telling the user to "add a modifier" would be wrong advice next to
+  the remapping editor. Hotkeys stay registered while it runs — the hotkey
+  handlers report firings via `recordHotkeyFired` since Carbon consumes those
+  events before NSEvent monitors see them. Passes events through untouched
+  while ShortcutRecorder is capturing (`shouldPassThrough`).
 - `ShortcutRecorder.swift` — captures the next key combo for the "Reassign"
   buttons in Settings, via a *local* NSEvent monitor (permission-free).
   While recording, AppDelegate unregisters all Carbon hotkeys (a registered
@@ -194,9 +227,94 @@ sourcekit-lsp, which understands SPM natively).
   live recording so hotkeys can't stay unregistered. Keys resolve via
   `HotkeyManager.keyNames` (keyCode → name) so shifted/optioned characters
   record correctly.
+- `HIDKeys.swift` — the supported key set as one table, in the three
+  vocabularies this app has to speak at once: a hand-editable name for the
+  config, a HID usage (page 0x07) for hidutil, and a virtual keycode for the
+  event tap. Lookups are lenient on the name (`caps_lock`, `CapsLock` and
+  `caps lock` all land on the same key) since the config is hand-edited.
+  `carrierPool` is the F13–F20 block, handed out to dual-role mappings — see
+  KeyRemapper for why that indirection exists.
+- `Keyboards.swift` — keyboard detection, the KeyboardRef half of what
+  DisplayProfiles does for screens. `KeyboardIdentity` reads the IOKit registry
+  (properties only — *opening* a HID device would prompt for Input Monitoring,
+  so nothing here does) and fingerprints each keyboard as
+  `hid:vendor-product[-serial]`, or `builtin`. Deliberately *not* "#n"-suffixed
+  the way displays are: one physical keyboard often publishes several HID
+  services and they must collapse to one entry, at the cost of two identical
+  serial-less keyboards looking like one — hidutil couldn't tell them apart
+  either. Devices with no `Transport` are skipped, which is what filters out
+  driver-provided virtual keyboards (Karabiner's and the like).
+  `matchingJSON(for:)` builds hidutil's `--matching` dictionary: vendor plus
+  product, deliberately *without* a usage filter, because a keyboard whose
+  keyboard interface is currently seized by another driver publishes no
+  keyboard-usage service and a filtered matcher would silently select nothing;
+  landing on the device's other interfaces is harmless, since a UserKeyMapping
+  only rewrites keyboard-page usages. The built-in keyboard publishes no vendor
+  or product id at all, so it falls back to its registry product string — and
+  that one *does* need the usage filter, because the trackpad beside it answers
+  to the same name. (`BuiltIn` looks like the obvious matcher and isn't:
+  hidutil doesn't accept it and silently matches nothing.)
+  `KeyboardManager` watches IOKit match/terminate notifications (debounced 0.8s;
+  an empty read means the registry is mid-reconfiguration, never "no keyboards")
+  plus wake, and files a profile for any keyboard it hasn't seen — cloned from
+  the most recently edited one, so a new board inherits the map you've been
+  tuning. With no profiles at all it starts empty: a first run must not invent
+  remappings. Unlike displays there's no "active" profile to resolve — every
+  attached keyboard's map is live at once.
+- `KeyRemapper.swift` — the HID half plus the coordinator. `KeyRemapPlan`
+  resolves config + attached keyboards into what each engine should be doing;
+  computing it in one place is what keeps the halves agreeing, since the carrier
+  key hidutil rewrites a dual-role key *to* is the same one the tap watches
+  *for*. `KeyRemapper` applies it by shelling out to `/usr/bin/hidutil`, which
+  needs no TCC grant and no root, and whose `--matching` filter is what makes a
+  mapping per-keyboard. What it writes is decided by reading the service back
+  (`liveMapping`, straight off the IOKit registry — permission-free and no
+  subprocess), never by remembering what it wrote: a UserKeyMapping lives on the
+  HID service, so it dies with an unplug or a reboot, and the Modifier Keys pane,
+  another remapper or a second copy of this app quitting will clear it just as
+  happily. A cache would go on believing a mapping that is no longer there and
+  nothing would ever put it back. `KeyboardIdentity.matchingProperties(for:)` is
+  the one predicate behind both halves — the registry walk has to single out
+  exactly the services `matchingJSON` sent hidutil at, or the two would disagree
+  forever. hidutil is always waited on, including off the main thread: an exit
+  status nobody reads is how a mapping fails to apply in silence.
+  `KeyRemapPlan.chord(for:flags:layers:)` is where chord *selection* lives —
+  a pure decision kept next to the plan that defines it rather than
+  reimplemented on the key path — and a held layer beats a global chord, being
+  the more specific statement. `CapsLock.turnOff()` lives here too: caps lock
+  is the one key whose effect outlives the press, so remapping it away strands
+  whatever state it was left in — log in with caps on and there's nothing left
+  to press it off with. `KeyRemapPlan.capsLockUnreachable` is what asks for it
+  (caps lock's key taken away and nothing else emitting caps lock — a mapping
+  or chord that still *sends* caps lock leaves a way back), and `KeyModEngine`
+  acts on it on *every* apply, not just when the plan changes: the state is set
+  by the world, and launch / rescan / wake / config edit are the only moments
+  we're reliably looking. Permission-free like the rest — IOHIDSystem's
+  parameter connection needs no TCC grant and no root. `KeyModEngine` is the
+  one switch over both engines; `shutDown()` leaves no trace.
+- `DualRoleTap.swift` — the userspace half: keys that mean one thing tapped and
+  another held. A `CGEventTap` at `.cghidEventTap` rewrites events before
+  anything else sees them, including the WindowServer's hotkey dispatch, so a
+  hold-modifier combo can still fire a Carbon hotkey. It never has to ask which
+  keyboard an event came from — a CGEvent can't answer that, which is the usual
+  reason this kind of thing needs a kernel driver — because hidutil has already
+  rewritten the real key to a per-device carrier, so the carrier *is* the answer.
+  Modifiers are OR'd onto events passing through while a carrier is down rather
+  than synthesized as flagsChanged: an injected modifier that missed its release
+  would leave the machine stuck, and nothing reads modifier state except through
+  these events. A key's keyUp is stamped with whatever its keyDown got, so
+  letting the carrier go first can't leave an app holding a phantom key.
+  Pressing another key settles "this was a hold" immediately; the timer only
+  decides what a lone press-and-release meant. A chord match short-circuits all
+  of that: the original key is swallowed and a replacement posted in its place,
+  a half at a time — down on the trigger's down, up on its up — so holding a
+  chord holds the replacement and auto-repeat repeats it. What a key was
+  rewritten *to* is remembered from its keyDown so the keyUp matches even if the
+  layer key was released first. Re-enables itself on `tapDisabledByTimeout`,
+  which macOS fires if the tap ever blocks.
 - `SettingsView.swift` — SwiftUI settings hosted in an NSWindow
-  (NSHostingController); tabs: Workspaces, Shortcuts, Displays, Floating Apps,
-  Menu Bar (icon grid over `MenuBarIcon.available` + the workspace-name toggle,
+  (NSHostingController); tabs: Workspaces, Shortcuts, Displays, Key
+  Modifications, Floating Apps, Menu Bar (icon grid over `MenuBarIcon.available` + the workspace-name toggle,
   with a preview that mirrors the same fallback the status item uses).
   The follow-focus toggle sits on its own row above the Workspaces tab's
   profile picker — it's global, unlike everything below the picker.
@@ -222,6 +340,23 @@ sourcekit-lsp, which understands SPM natively).
   materialised on first write (the steppers' binding), which is why an
   untouched display stays out of the config. `ShortcutField` shows the current combo as text
   with Reassign (records via ShortcutRecorder) and clear buttons.
+- `KeyModificationsTab.swift` — the settings UI for the key-modification
+  engine, in its own file because that feature already owns four others.
+  Scoped to one keyboard at a time by a picker that opens on whichever is
+  actually plugged in. The by-id bindings stamp `modifiedAt` on every write,
+  since "a new keyboard starts from the last edited keymaps" is exactly what
+  that field means. The master toggle sits *outside* the region it disables —
+  SwiftUI's `.disabled` is additive, so an inner `.disabled(false)` can't undo
+  an outer one, and the switch would have had no way back on. Keys are chosen
+  from a grouped popup rather than by pressing them: once a mapping is live the
+  physical key no longer reports itself (caps lock already arrives as F18), so
+  recording would capture the carrier. A hold's chords hang off the mapping
+  behind an explicit chevron button — DisclosureGroup's own chevron is
+  invisible against a List row here. The KeyDebugger box sits at the top,
+  outside the disabled region, since a diagnostic is most wanted exactly when
+  the modifications are switched off. Deleting the profile of a keyboard that's
+  *attached* is futile (the next scan files it again, cloned from whatever was
+  edited last), so that menu offers Clear Mappings instead.
 
 ## Conventions
 
@@ -230,8 +365,15 @@ sourcekit-lsp, which understands SPM natively).
   metadata functions need no TCC grant, and `didChangeScreenParametersNotification`
   is an ordinary notification. Don't reach for IOKit/EDID parsing for nicer
   display names — the profile name is user-editable, which is cheaper.
-- Only tiling (LayoutEngine/SnapManager's AX calls) needs the Accessibility
-  permission; everything else must stay permission-free. TCC ties the grant to
+- Key modifications are split across two engines by what they need. A plain 1:1
+  remap goes through hidutil at the HID layer: permission-free, and *below*
+  secure input, so it keeps working in password fields. Only a dual-role key
+  (tap one thing, hold another) or a chord needs the event tap — so a config
+  with nothing but remaps never creates one, and never needs a grant. The tap is inert inside
+  secure input, which is the price of it.
+- Tiling (LayoutEngine/SnapManager's AX calls) and dual-role keys
+  (DualRoleTap) need the Accessibility permission; everything else must stay
+  permission-free. TCC ties the grant to
   the code signature: ad-hoc re-signing (`make app`) resets it on every
   rebuild — pass `CODESIGN_ID="Apple Development: … (TEAMID)"` for a stable
   grant. For dev, processes launched from a terminal are TCC-attributed to the

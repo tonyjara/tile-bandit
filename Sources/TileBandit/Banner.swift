@@ -64,6 +64,11 @@ enum Banner {
         out += "\n"
         out += "  \(dim("config "))  \(config)\n"
         out += "  \(dim("tiling "))  \(AccessibilityPermission.isGranted ? "Accessibility granted" : "needs Accessibility — Settings ▸ Shortcuts ▸ Grant")\n"
+        // Named here because a keyboard is the one piece of hardware whose
+        // detection you can't confirm by looking at the screen.
+        let keyboards = KeyboardIdentity.snapshot()
+        let names = keyboards.isEmpty ? "none detected" : keyboards.map(\.name).joined(separator: ", ")
+        out += "  \(dim("keys   "))  \(names)\n"
         out += "  \(dim("quit   "))  menu bar icon ▸ Quit Tile Bandit\n"
 
         print(out)

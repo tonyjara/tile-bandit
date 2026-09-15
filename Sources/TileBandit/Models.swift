@@ -506,9 +506,10 @@ enum MenuBarIcon: String, Codable, CaseIterable, Identifiable {
 
 struct Config: Codable, Equatable {
     /// 1 = flat `workspaces` list; 2 = workspaces nested inside display
-    /// profiles; 3 = one grid per display inside a workspace. Reading an older
-    /// file migrates it (see `init(from:)` here and in Workspace/DisplayProfile).
-    static let currentVersion = 3
+    /// profiles; 3 = one grid per display inside a workspace; 4 = per-keyboard
+    /// key modifications. Reading an older file migrates it (see `init(from:)`
+    /// here and in Workspace/DisplayProfile).
+    static let currentVersion = 4
 
     var version: Int
     /// One entry per display setup. Workspaces live inside a profile, so the
@@ -537,6 +538,20 @@ struct Config: Codable, Equatable {
     /// the Dock — all of which unhide it) switches to that workspace instead
     /// of leaving one stray window floating over the one you're in.
     var followFocusedApp: Bool
+    /// One entry per keyboard — the Karabiner-shaped half of the app. Separate
+    /// from `profiles` because keyboards and displays come and go
+    /// independently: which map is live depends on what you're typing on, not
+    /// on what you're looking at.
+    var keyboards: [KeyboardProfile]
+    /// Master switch for all of it. Off means no hidutil mapping is applied and
+    /// no event tap is created, which is also how the app leaves the machine
+    /// when it quits.
+    var keyModifications: Bool
+    /// Chords that apply whatever you're typing on. Global rather than filed
+    /// under a keyboard because an event tap can't tell which keyboard a plain
+    /// keypress came from — only a held layer key carries that. Mostly this is
+    /// where a combination gets *disabled* (⌘H, say).
+    var chords: [KeyChord]
 
     private enum CodingKeys: String, CodingKey {
         case version, profiles, floatingApps, hideUnassignedShortcut, applyLayoutShortcut
@@ -544,6 +559,7 @@ struct Config: Codable, Equatable {
         case nextWorkspaceShortcut, previousWorkspaceShortcut
         case openSettingsShortcut, reloadConfigShortcut, snap
         case menuBarIcon, showWorkspaceName, followFocusedApp
+        case keyboards, keyModifications, chords
         /// v1 only, read for migration and never written back.
         case workspaces
     }
@@ -563,7 +579,10 @@ struct Config: Codable, Equatable {
         snap: SnapSettings = SnapSettings(),
         menuBarIcon: MenuBarIcon = .fallback,
         showWorkspaceName: Bool = true,
-        followFocusedApp: Bool = true
+        followFocusedApp: Bool = true,
+        keyboards: [KeyboardProfile] = [],
+        keyModifications: Bool = true,
+        chords: [KeyChord] = []
     ) {
         self.version = version
         self.profiles = profiles
@@ -580,6 +599,9 @@ struct Config: Codable, Equatable {
         self.menuBarIcon = menuBarIcon
         self.showWorkspaceName = showWorkspaceName
         self.followFocusedApp = followFocusedApp
+        self.keyboards = keyboards
+        self.keyModifications = keyModifications
+        self.chords = chords
     }
 
     init(from decoder: Decoder) throws {
@@ -612,6 +634,9 @@ struct Config: Codable, Equatable {
         menuBarIcon = try container.decodeIfPresent(MenuBarIcon.self, forKey: .menuBarIcon) ?? .fallback
         showWorkspaceName = try container.decodeIfPresent(Bool.self, forKey: .showWorkspaceName) ?? true
         followFocusedApp = try container.decodeIfPresent(Bool.self, forKey: .followFocusedApp) ?? true
+        keyboards = try container.decodeIfPresent([KeyboardProfile].self, forKey: .keyboards) ?? []
+        keyModifications = try container.decodeIfPresent(Bool.self, forKey: .keyModifications) ?? true
+        chords = try container.decodeIfPresent([KeyChord].self, forKey: .chords) ?? []
     }
 
     private static func shortcut(
@@ -641,5 +666,369 @@ struct Config: Codable, Equatable {
         try container.encode(menuBarIcon, forKey: .menuBarIcon)
         try container.encode(showWorkspaceName, forKey: .showWorkspaceName)
         try container.encode(followFocusedApp, forKey: .followFocusedApp)
+        try container.encode(keyboards, forKey: .keyboards)
+        try container.encode(keyModifications, forKey: .keyModifications)
+        try container.encode(chords, forKey: .chords)
+    }
+}
+
+// MARK: - Key modifications
+
+/// The modifiers a dual-role hold stands in for. Encoded as names
+/// (`["control","option","shift","command"]`) because the config is
+/// hand-edited; `"hyper"` is accepted as shorthand for all four.
+struct ModifierSet: OptionSet, Codable, Hashable, Identifiable {
+    let rawValue: Int
+
+    var id: Int { rawValue }
+
+    init(rawValue: Int) { self.rawValue = rawValue }
+
+    static let control = ModifierSet(rawValue: 1 << 0)
+    static let option = ModifierSet(rawValue: 1 << 1)
+    static let shift = ModifierSet(rawValue: 1 << 2)
+    static let command = ModifierSet(rawValue: 1 << 3)
+    /// Only ever *sent*, never matched against — see `KeyChord.with`. It exists
+    /// so a chord can emit a real function key (fn+F11 is "show desktop",
+    /// where a bare F11 is whatever the media-key row does).
+    static let function = ModifierSet(rawValue: 1 << 4)
+    /// All four at once — the usual reason to want a dual-role key in the
+    /// first place, since nothing else is bound to it.
+    static let hyper: ModifierSet = [.control, .option, .shift, .command]
+
+    /// Flag, config name, menu-bar glyph. One table so encoding, decoding and
+    /// display can't drift apart.
+    private static let names: [(flag: ModifierSet, name: String, glyph: String)] = [
+        (.function, "fn", "fn"),
+        (.control, "control", "⌃"),
+        (.option, "option", "⌥"),
+        (.shift, "shift", "⇧"),
+        (.command, "command", "⌘"),
+    ]
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode([String].self)
+        let wanted = Set(raw.map { $0.lowercased() })
+        if wanted.contains("hyper") {
+            self = .hyper
+            return
+        }
+        // An unrecognised name is dropped rather than thrown on — losing one
+        // modifier beats refusing to load the file.
+        self = Self.names.reduce(into: []) { set, entry in
+            if wanted.contains(entry.name) { set.insert(entry.flag) }
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(Self.names.filter { contains($0.flag) }.map(\.name))
+    }
+
+    /// The individually selectable modifiers, in the order macOS writes them —
+    /// for the settings toggles. `fn` is separate because it's send-only.
+    static let choices: [ModifierSet] = [.control, .option, .shift, .command]
+
+    /// "⌃⌥⇧⌘", in the order macOS writes them.
+    var display: String { Self.names.filter { contains($0.flag) }.map(\.glyph).joined() }
+
+    var isHyper: Bool { self == .hyper }
+}
+
+/// A key, by the name it has in `HIDKeys`. Stored as a name rather than a
+/// usage or a keycode so the config stays readable, and resolved on use so an
+/// unknown name disables one mapping instead of breaking the decode.
+struct KeyRef: Codable, Equatable, Hashable, Identifiable, ExpressibleByStringLiteral {
+    var name: String
+
+    var id: String { name }
+
+    init(_ name: String) { self.name = name }
+    init(stringLiteral value: String) { self.init(value) }
+
+    init(from decoder: Decoder) throws {
+        name = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(name)
+    }
+
+    var key: HIDKey? { HIDKeys.named(name) }
+    var isKnown: Bool { key != nil }
+    /// "Caps Lock" — falls back to the raw name so a typo is visible in the UI
+    /// rather than silently blank.
+    var label: String { key?.label ?? name }
+}
+
+/// A chord rewrite: one key, pressed with a given set of modifiers, becomes a
+/// different key with a different set — or nothing at all.
+///
+/// Two places use these. Inside a `KeyMapping.chords` they're the layer a hold
+/// opens, and they're device-scoped for free, because the hold that gates them
+/// is. In `Config.chords` they're global and honestly so: a plain keypress
+/// carries no device identity an event tap can read, so there is no such thing
+/// as a per-keyboard chord outside a layer.
+struct KeyChord: Codable, Equatable, Hashable, Identifiable {
+    var id: UUID
+    /// The key that triggers it.
+    var from: KeyRef
+    /// Modifiers that must be down, matched *exactly* — ⌘H doesn't fire on
+    /// ⌘⇧H. Inside a layer these are the modifiers besides the held key, so an
+    /// empty set means the layer key and this key alone. `fn` is never matched
+    /// on, only sent: the laptop keyboard sets it on its own in ways that would
+    /// make an exact match unpredictable.
+    var with: ModifierSet
+    /// `nil` swallows the chord — the combination does nothing at all, which is
+    /// how a key like ⌘H gets disabled.
+    var to: KeyRef?
+    /// The modifiers the replacement is sent with.
+    var send: ModifierSet
+    var enabled: Bool
+
+    init(
+        id: UUID = UUID(),
+        from: KeyRef,
+        with: ModifierSet = [],
+        to: KeyRef? = nil,
+        send: ModifierSet = [],
+        enabled: Bool = true
+    ) {
+        self.id = id
+        self.from = from
+        self.with = with
+        self.to = to
+        self.send = send
+        self.enabled = enabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        from = try container.decode(KeyRef.self, forKey: .from)
+        with = try container.decodeIfPresent(ModifierSet.self, forKey: .with) ?? []
+        to = try container.decodeIfPresent(KeyRef.self, forKey: .to)
+        send = try container.decodeIfPresent(ModifierSet.self, forKey: .send) ?? []
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+    }
+
+    /// A chord whose `to` names a key we don't know is dropped; one with no
+    /// `to` at all is the deliberate "do nothing" case, not a mistake.
+    var isUsable: Bool { enabled && from.isKnown && (to?.isKnown ?? true) }
+
+    /// "⌘H → nothing", "Q → ⌥A"
+    var summary: String {
+        let trigger = with.isEmpty ? from.label : "\(with.display)\(from.label)"
+        guard let to else { return "\(trigger) → nothing" }
+        return "\(trigger) → \(send.display)\(to.label)"
+    }
+}
+
+/// One key modification on one keyboard.
+///
+/// `hold` is what decides which engine does the work. Without it the mapping is
+/// a plain 1:1 remap, which hidutil performs at the HID layer — permission-free
+/// and immune to secure input. With it the key has to be watched in userspace,
+/// which means the event tap and the Accessibility grant that comes with it.
+struct KeyMapping: Codable, Equatable, Hashable, Identifiable {
+    var id: UUID
+    /// The physical key being modified.
+    var from: KeyRef
+    /// What a press sends. `nil` with a `hold` set means the key is a modifier
+    /// and nothing else — a plain hold key with no tap action.
+    var to: KeyRef?
+    /// The modifiers a hold stands in for. Empty or nil = not dual-role.
+    var hold: ModifierSet?
+    /// How long a press has to be held before it stops counting as a tap.
+    /// Pressing another key always wins immediately, so this only decides what
+    /// a lone press-and-release does.
+    var holdMilliseconds: Int
+    /// Rewrites that apply only while this key is held — the layer the hold
+    /// opens. A key with no chord here still gets the hold's modifiers, so a
+    /// half-filled layer still behaves like a plain hyper key everywhere else.
+    var chords: [KeyChord]
+    var enabled: Bool
+
+    init(
+        id: UUID = UUID(),
+        from: KeyRef,
+        to: KeyRef? = nil,
+        hold: ModifierSet? = nil,
+        holdMilliseconds: Int = 200,
+        chords: [KeyChord] = [],
+        enabled: Bool = true
+    ) {
+        self.id = id
+        self.from = from
+        self.to = to
+        self.hold = hold
+        self.holdMilliseconds = Self.clampHold(holdMilliseconds)
+        self.chords = chords
+        self.enabled = enabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        from = try container.decode(KeyRef.self, forKey: .from)
+        to = try container.decodeIfPresent(KeyRef.self, forKey: .to)
+        hold = try container.decodeIfPresent(ModifierSet.self, forKey: .hold)
+        holdMilliseconds = Self.clampHold(try container.decodeIfPresent(Int.self, forKey: .holdMilliseconds) ?? 200)
+        chords = try container.decodeIfPresent([KeyChord].self, forKey: .chords) ?? []
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+    }
+
+    /// Below ~60ms a tap can't be told from a hold; above a second it stops
+    /// feeling like a key.
+    private static func clampHold(_ value: Int) -> Int { min(max(value, 60), 1000) }
+
+    /// Needs the event tap, rather than being a remap hidutil can do alone.
+    var isDualRole: Bool { !(hold ?? []).isEmpty }
+
+    /// A mapping with an unknown key name, or with nothing to do, is carried in
+    /// the config but never applied.
+    var isUsable: Bool {
+        guard enabled, from.isKnown else { return false }
+        if isDualRole { return to?.isKnown ?? true }
+        return to?.isKnown ?? false
+    }
+
+    /// "Caps Lock → Escape / hold ⌃⌥⇧⌘"
+    var summary: String {
+        var text = "\(from.label) → \(to?.label ?? "—")"
+        if let hold, !hold.isEmpty { text += " / hold \(hold.display)" }
+        if !chords.isEmpty { text += " + \(chords.count) chord\(chords.count == 1 ? "" : "s")" }
+        return text
+    }
+}
+
+/// A physical keyboard, fingerprinted the way DisplayRef fingerprints a screen.
+///
+/// The identifiers ride along because they're what hidutil matches on, and a
+/// profile for a keyboard that's unplugged right now still has to describe the
+/// hardware it's for. `name` is what the UI shows and the user may rename;
+/// `productName` is the untouched registry string, kept separate because it's
+/// the only handle the built-in keyboard offers — it publishes no vendor or
+/// product id at all.
+struct KeyboardRef: Codable, Equatable, Hashable, Identifiable {
+    var key: String
+    var name: String
+    var productName: String?
+    var vendorID: Int?
+    var productID: Int?
+    var isBuiltIn: Bool
+
+    var id: String { key }
+
+    init(
+        key: String,
+        name: String,
+        productName: String? = nil,
+        vendorID: Int? = nil,
+        productID: Int? = nil,
+        isBuiltIn: Bool = false
+    ) {
+        self.key = key
+        self.name = name
+        self.productName = productName
+        self.vendorID = vendorID
+        self.productID = productID
+        self.isBuiltIn = isBuiltIn
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        key = try container.decodeIfPresent(String.self, forKey: .key) ?? ""
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? key
+        productName = try container.decodeIfPresent(String.self, forKey: .productName)
+        vendorID = try container.decodeIfPresent(Int.self, forKey: .vendorID)
+        productID = try container.decodeIfPresent(Int.self, forKey: .productID)
+        isBuiltIn = try container.decodeIfPresent(Bool.self, forKey: .isBuiltIn) ?? false
+    }
+}
+
+/// The key modifications for one keyboard.
+///
+/// Unlike a DisplayProfile — which stands for a whole *set* of attached screens
+/// — a keyboard profile is one-to-one with one keyboard, because that's the
+/// granularity a remap applies at: two keyboards plugged in at once each keep
+/// their own map, and both are live.
+struct KeyboardProfile: Codable, Equatable, Hashable, Identifiable {
+    var id: UUID
+    var name: String
+    /// `nil` means unbound — a map authored for hardware that isn't attached
+    /// (duplicated from another keyboard, say). Detection never creates these.
+    var keyboard: KeyboardRef?
+    var enabled: Bool
+    var mappings: [KeyMapping]
+    /// Bumped on every edit. A keyboard Tile Bandit has never seen starts from
+    /// the most recently edited profile, so a new board inherits the map you've
+    /// been tuning rather than arriving blank.
+    var modifiedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        keyboard: KeyboardRef? = nil,
+        enabled: Bool = true,
+        mappings: [KeyMapping] = [],
+        modifiedAt: Date = Date()
+    ) {
+        self.id = id
+        self.name = name
+        self.keyboard = keyboard
+        self.enabled = enabled
+        self.mappings = mappings
+        self.modifiedAt = Self.whole(modifiedAt)
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Untitled"
+        keyboard = try container.decodeIfPresent(KeyboardRef.self, forKey: .keyboard)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        mappings = try container.decodeIfPresent([KeyMapping].self, forKey: .mappings) ?? []
+        modifiedAt = Self.whole(try container.decodeIfPresent(Date.self, forKey: .modifiedAt) ?? Date())
+    }
+
+    /// Whole seconds, because that's all the ISO-8601 the config is written in
+    /// can hold. Without this a profile stops being equal to itself the moment
+    /// it's saved and read back, which the config's `removeDuplicates` would
+    /// then see as a change on every reload.
+    private static func whole(_ date: Date) -> Date {
+        Date(timeIntervalSince1970: date.timeIntervalSince1970.rounded(.down))
+    }
+
+    var isBound: Bool { keyboard != nil }
+
+    /// Records an edit. This is what "a new keyboard starts from the last
+    /// edited keymaps" reads, so every mutation through Settings goes past it.
+    mutating func markEdited() { modifiedAt = Self.whole(Date()) }
+
+    /// The mappings that actually reach an engine.
+    var usableMappings: [KeyMapping] { enabled ? mappings.filter(\.isUsable) : [] }
+
+    /// Copy this map onto another keyboard — fresh mapping ids, since they're
+    /// that profile's own from here on.
+    func cloned(onto keyboard: KeyboardRef?, named name: String) -> KeyboardProfile {
+        KeyboardProfile(
+            name: name,
+            keyboard: keyboard,
+            enabled: enabled,
+            mappings: mappings.map {
+                KeyMapping(
+                    from: $0.from,
+                    to: $0.to,
+                    hold: $0.hold,
+                    holdMilliseconds: $0.holdMilliseconds,
+                    chords: $0.chords.map {
+                        KeyChord(from: $0.from, with: $0.with, to: $0.to, send: $0.send, enabled: $0.enabled)
+                    },
+                    enabled: $0.enabled
+                )
+            }
+        )
     }
 }

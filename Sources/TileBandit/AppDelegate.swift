@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var engine = WorkspaceEngine(store: store)
     private lazy var snap = SnapManager(store: store, engine: engine)
     private lazy var displays = DisplayProfileManager(store: store)
+    private lazy var keyboards = KeyboardManager(store: store)
+    private let keyMods = KeyModEngine()
     private let hotkeys = HotkeyManager()
     private let keyDebugger = KeyDebugger()
     private let shortcutRecorder = ShortcutRecorder()
@@ -72,10 +74,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] _ in self?.applyConfig() }
             .store(in: &cancellables)
 
+        // A keyboard coming or going doesn't touch workspaces or hotkeys, so
+        // it reapplies the key modifications on its own rather than going
+        // through applyConfig().
+        keyboards.onKeyboardsChange = { [weak self] attached in
+            guard let self else { return }
+            self.keyMods.apply(config: self.store.config, attached: attached)
+        }
+
         // Resolves the attached displays to a profile (creating one on first
         // run) before hotkeys are registered, so they land on the right
         // workspaces. Also fires applyConfig() via the handler above.
         displays.start()
+        keyboards.start()
         applyConfig()
 
         // Start clean: hide apps that aren't assigned to any workspace.
@@ -90,6 +101,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registerHotkeys()
         rebuildMenu()
         snap.refresh()
+        keyMods.apply(config: store.config, attached: keyboards.attached)
+    }
+
+    /// Key modifications are the one thing this app leaves *on the machine*
+    /// rather than in its own process — a hidutil mapping outlives us, and a
+    /// carrier key with nothing left to interpret it would be a dead key. So
+    /// quitting hands every keyboard back unmodified.
+    func applicationWillTerminate(_ notification: Notification) {
+        keyMods.shutDown()
     }
 
     private func registerHotkeys() {
@@ -343,7 +363,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     store: store,
                     keyDebugger: keyDebugger,
                     recorder: shortcutRecorder,
-                    displays: displays
+                    displays: displays,
+                    keyboards: keyboards
                 )
             )
             let window = NSWindow(contentViewController: hosting)

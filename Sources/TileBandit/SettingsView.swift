@@ -8,6 +8,7 @@ struct SettingsView: View {
     @ObservedObject var keyDebugger: KeyDebugger
     @ObservedObject var recorder: ShortcutRecorder
     let displays: DisplayProfileManager
+    let keyboards: KeyboardManager
 
     /// Which display profile the Workspaces and Shortcuts tabs edit. Follows
     /// the connected one, but any profile can be selected so you can set up a
@@ -18,10 +19,12 @@ struct SettingsView: View {
         TabView {
             WorkspacesTab(store: store, recorder: recorder, profileID: $profileID)
                 .tabItem { Text("Workspaces") }
-            ShortcutsTab(store: store, debugger: keyDebugger, recorder: recorder, profileID: $profileID)
+            ShortcutsTab(store: store, recorder: recorder, profileID: $profileID)
                 .tabItem { Text("Shortcuts") }
             DisplaysTab(store: store, displays: displays, profileID: $profileID)
                 .tabItem { Text("Displays") }
+            KeyModificationsTab(store: store, keyboards: keyboards, debugger: keyDebugger)
+                .tabItem { Text("Key Modifications") }
             FloatingAppsTab(store: store)
                 .tabItem { Text("Floating Apps") }
             MenuBarTab(store: store)
@@ -834,7 +837,6 @@ struct AppIcon: View {
 
 struct ShortcutsTab: View {
     @ObservedObject var store: ConfigStore
-    @ObservedObject var debugger: KeyDebugger
     @ObservedObject var recorder: ShortcutRecorder
     /// Workspace switch actions belong to a display profile, so this tab edits
     /// the same profile the Workspaces tab is on.
@@ -842,57 +844,6 @@ struct ShortcutsTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            GroupBox {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Button(debugger.isActive ? "Stop Listening" : "Start Listening") {
-                            debugger.toggle()
-                        }
-                        if debugger.isActive {
-                            Text("Stays on until you stop it. Keys are captured while you're on this tab; global hotkeys show up as fired actions.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-
-                    if debugger.isActive {
-                        HStack(spacing: 12) {
-                            Text("Held:")
-                                .foregroundStyle(.secondary)
-                            Text(debugger.heldModifiers.isEmpty ? "—" : debugger.heldModifiers)
-                                .font(.system(.title3, design: .monospaced))
-                        }
-                    }
-
-                    if let press = debugger.lastPress {
-                        HStack(spacing: 12) {
-                            Text("Last key:")
-                                .foregroundStyle(.secondary)
-                            Text(press.combo)
-                                .font(.system(.title3, design: .monospaced))
-                                .bold()
-                            Text("keyCode \(press.keyCode)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Text(press.verdict)
-                            .font(.caption)
-                            .foregroundStyle(press.usable ? Color.green : Color.orange)
-                    }
-
-                    if !debugger.isActive && debugger.lastPress == nil {
-                        Text("Activate to see which keys and modifiers macOS delivers while a Tile Bandit window is focused, and which global hotkeys fire — useful when a shortcut doesn't do what you expect.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(4)
-            } label: {
-                Text("Key Debugger").font(.headline)
-            }
-
             HStack(spacing: 8) {
                 Text("Actions")
                     .font(.headline)
@@ -983,8 +934,6 @@ struct ShortcutsTab: View {
             .listStyle(.inset(alternatesRowBackgrounds: true))
         }
         .padding(16)
-        .onAppear { debugger.shortcutsTabVisible = true }
-        .onDisappear { debugger.shortcutsTabVisible = false }
     }
 
     private func shortcutRow(_ label: String, _ shortcut: Binding<Shortcut?>, id: String) -> some View {

@@ -2,7 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import Combine
 
-/// Key-press debugger for the Shortcuts tab.
+/// Key-press debugger for the Key Modifications tab.
 ///
 /// Uses NSEvent.addLocalMonitorForEvents, which only sees events while Tile
 /// Bandit's own window is focused — that's what keeps it permission-free
@@ -12,8 +12,8 @@ import Combine
 /// via `recordHotkeyFired` — those show up even when the window isn't focused.
 ///
 /// Once started it stays on until explicitly stopped. Key presses are only
-/// swallowed while the Shortcuts tab is visible (to avoid beeps); on other
-/// tabs events pass through so typing keeps working.
+/// swallowed while its own tab is visible (to avoid beeps); on other tabs
+/// events pass through so typing keeps working.
 final class KeyDebugger: ObservableObject {
     struct KeyPress {
         let combo: String
@@ -26,8 +26,8 @@ final class KeyDebugger: ObservableObject {
     @Published private(set) var heldModifiers = ""
     @Published private(set) var lastPress: KeyPress?
 
-    /// Set by the Shortcuts tab's onAppear/onDisappear.
-    var shortcutsTabVisible = false
+    /// Set by the owning tab's onAppear/onDisappear.
+    var debuggerTabVisible = false
 
     /// While ShortcutRecorder is capturing a combo, this debugger passes
     /// events through untouched so the recorder's monitor sees them and
@@ -79,9 +79,13 @@ final class KeyDebugger: ObservableObject {
             return event
         case .keyDown:
             if !event.isARepeat { record(event) }
-            // Swallow presses only on the Shortcuts tab (prevents beeps);
-            // elsewhere typing keeps working while the debugger observes.
-            return shortcutsTabVisible ? nil : event
+            // Never eat a key on its way into a text field. The tab this lives
+            // on has editable ones (a keyboard's name, a hold threshold), and
+            // a field editor is an NSTextView.
+            if NSApp.keyWindow?.firstResponder is NSTextView { return event }
+            // Swallow presses only on the debugger's own tab (prevents beeps);
+            // elsewhere typing keeps working while it observes.
+            return debuggerTabVisible ? nil : event
         default:
             return event
         }
@@ -93,13 +97,23 @@ final class KeyDebugger: ObservableObject {
         let baseKey = (event.charactersIgnoringModifiers ?? "").lowercased()
         let supported = HotkeyManager.keyCodes[baseKey] != nil
 
+        // Two different questions, and which one matters depends on what the
+        // user is doing: can this key be *remapped*, and can this combo be a
+        // global shortcut? A bare key fails the second and passes the first.
+        let remappable = HIDKeys.withKeyCode(event.keyCode)
+
         let verdict: String
         let usable: Bool
         if modifiers.isEmpty {
-            verdict = "Add a modifier (⌃⌥⇧⌘) — bare keys can't be global shortcuts."
-            usable = false
+            if let remappable {
+                verdict = "Remappable as \(remappable.label). A global shortcut would need ⌃⌥⇧⌘."
+                usable = true
+            } else {
+                verdict = "Not a key Tile Bandit can remap, and bare keys can't be shortcuts."
+                usable = false
+            }
         } else if !supported {
-            verdict = "Key not in the supported set (0–9, a–z, punctuation) yet."
+            verdict = "Not in the shortcut key set (0–9, a–z, punctuation)."
             usable = false
         } else {
             verdict = "Usable as a shortcut."
