@@ -15,7 +15,9 @@ cask "tile-bandit" do
     strategy :github_latest
   end
 
-  depends_on macos: ">= :ventura"
+  # A bare symbol is a *minimum*: the cask DSL parses it with comparator ">=".
+  # The ">= :ventura" string form means the same thing and is deprecated.
+  depends_on macos: :ventura
 
   app "Tile Bandit.app"
 
