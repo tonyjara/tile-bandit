@@ -222,13 +222,18 @@ final class MaximizeHold {
     /// Sticky variant (default ⌥⇧M): maximize and leave it there. Dropping the
     /// saved frame first also commits a live peek — if the user re-presses with
     /// ⇧ added mid-hold, the release that follows has nothing to restore.
-    func stick() {
+    ///
+    /// `app` exists for the menu item: a menu action runs *after* the menu has
+    /// closed, so asking who's frontmost at that point is a race — the caller
+    /// noted it down when the menu opened instead. A hotkey passes nothing and
+    /// asks in the moment, which is accurate.
+    func stick(on app: NSRunningApplication? = nil) {
         restore = nil
         guard AccessibilityPermission.isGranted else {
             AccessibilityPermission.request()
             return
         }
-        guard let app = NSWorkspace.shared.frontmostApplication,
+        guard let app = app ?? NSWorkspace.shared.frontmostApplication,
               let window = AX.focusedWindow(pid: app.processIdentifier),
               let screen = AX.screenOf(window) ?? NSScreen.main
         else { return }

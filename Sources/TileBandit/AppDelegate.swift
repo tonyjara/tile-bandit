@@ -2,19 +2,6 @@ import AppKit
 import Combine
 import SwiftUI
 
-extension MenuBarIcon {
-    /// nil when this macOS doesn't ship the symbol. The picker filters on it
-    /// and `resolvedImage` falls back, so a symbol that isn't there can never
-    /// leave a blank, unclickable status item.
-    var image: NSImage? {
-        NSImage(systemSymbolName: rawValue, accessibilityDescription: "Tile Bandit — \(label)")
-    }
-
-    var resolvedImage: NSImage? { image ?? MenuBarIcon.fallback.image }
-
-    static var available: [MenuBarIcon] { allCases.filter { $0.image != nil } }
-}
-
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let store = ConfigStore()
     private lazy var engine = WorkspaceEngine(store: store)
@@ -28,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let maximizeHold = MaximizeHold()
 
     private var statusItem: NSStatusItem!
+    /// Who was in front when the status menu opened — see `menuMaximizeWindow`.
+    private var frontmostWhenMenuOpened: NSRunningApplication?
     private var settingsWindow: NSWindow?
     private var settingsCloseObserver: NSObjectProtocol?
     private var cancellables: Set<AnyCancellable> = []
@@ -102,6 +91,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
         snap.refresh()
         keyMods.apply(config: store.config, attached: keyboards.attached)
+        LoginItem.reconcile(enabled: store.config.launchAtLogin)
+    }
+
+    /// Opening Tile Bandit while it's already running opens Settings.
+    ///
+    /// This is the escape hatch for `hideMenuBarIcon`: with no status item and
+    /// possibly no shortcut assigned either, double-clicking the app in
+    /// /Applications (or hitting it in Spotlight) has to lead somewhere.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        openSettings()
+        return true
     }
 
     /// Key modifications are the one thing this app leaves *on the machine*
@@ -188,146 +188,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func rebuildMenu() {
-        let active = store.workspaces.first { $0.id == engine.activeWorkspaceID }
-        statusItem.button?.image = store.config.menuBarIcon.resolvedImage
+        // Hiding the icon leaves the hotkeys — and `applicationShouldHandleReopen`
+        // — as the ways back in, which is why both exist.
+        statusItem.isVisible = !store.config.hideMenuBarIcon
+        // Set here rather than once at launch so a menuBarIcon/showWorkspaceName
+        // change applies live.
+        statusItem.button?.image = store.config.menuBarIcon.resolvedImage(size: 16)
         // Hiding the name leaves the icon alone in the menu bar; without it
         // there'd be nothing left to click.
+        let active = store.workspaces.first { $0.id == engine.activeWorkspaceID }
         let name = store.config.showWorkspaceName ? active?.name : nil
         statusItem.button?.title = name.map { " \($0)" } ?? ""
 
-        let menu = NSMenu()
-
-        addDisplaySection(to: menu)
-        menu.addItem(.separator())
-
-        if store.workspaces.isEmpty {
-            menu.addItem(NSMenuItem(title: "No workspaces in this profile yet", action: nil, keyEquivalent: ""))
-        }
-
-        for workspace in store.workspaces {
-            let item = NSMenuItem(title: workspace.name, action: #selector(menuSwitch(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = workspace.id
-            if workspace.id == engine.activeWorkspaceID {
-                item.state = .on
-            }
-            if let shortcut = workspace.shortcut {
-                applyKeyEquivalent(shortcut, to: item)
-            }
-            menu.addItem(item)
-        }
-
-        menu.addItem(.separator())
-
-        let next = NSMenuItem(title: "Next Workspace", action: #selector(nextWorkspace), keyEquivalent: "")
-        next.target = self
-        if let shortcut = store.config.nextWorkspaceShortcut {
-            applyKeyEquivalent(shortcut, to: next)
-        }
-        menu.addItem(next)
-
-        let previous = NSMenuItem(title: "Previous Workspace", action: #selector(previousWorkspace), keyEquivalent: "")
-        previous.target = self
-        if let shortcut = store.config.previousWorkspaceShortcut {
-            applyKeyEquivalent(shortcut, to: previous)
-        }
-        menu.addItem(previous)
-
-        let hide = NSMenuItem(title: "Hide Unassigned Apps", action: #selector(hideUnassigned), keyEquivalent: "")
-        hide.target = self
-        if let shortcut = store.config.hideUnassignedShortcut {
-            applyKeyEquivalent(shortcut, to: hide)
-        }
-        menu.addItem(hide)
-
-        let applyLayout = NSMenuItem(title: "Apply Grid Layout", action: #selector(applyLayoutAction), keyEquivalent: "")
-        applyLayout.target = self
-        if let shortcut = store.config.applyLayoutShortcut {
-            applyKeyEquivalent(shortcut, to: applyLayout)
-        }
-        menu.addItem(applyLayout)
-
-        menu.addItem(.separator())
-
-        let settings = NSMenuItem(title: "Settings…", action: #selector(openSettingsAction), keyEquivalent: "")
-        settings.target = self
-        if let shortcut = store.config.openSettingsShortcut {
-            applyKeyEquivalent(shortcut, to: settings)
-        }
-        menu.addItem(settings)
-
-        let reload = NSMenuItem(title: "Reload Config", action: #selector(reloadConfig), keyEquivalent: "")
-        reload.target = self
-        if let shortcut = store.config.reloadConfigShortcut {
-            applyKeyEquivalent(shortcut, to: reload)
-        }
-        menu.addItem(reload)
-
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Tile Bandit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-
+        let menu = StatusMenu(
+            store: store,
+            activeWorkspaceID: engine.activeWorkspaceID,
+            target: self
+        ).build()
+        menu.delegate = self
         statusItem.menu = menu
-    }
-
-    /// Shows which display profile is live, with a submenu to force another
-    /// one — handy for setting up a desk you're not sitting at. A manual pick
-    /// holds until the next display change, which re-detects and takes it back.
-    private func addDisplaySection(to menu: NSMenu) {
-        let item = NSMenuItem(
-            title: "Display: \(store.activeProfile?.name ?? "Detecting…")",
-            action: nil,
-            keyEquivalent: ""
-        )
-        let submenu = NSMenu()
-        for profile in store.config.profiles {
-            let entry = NSMenuItem(
-                title: "\(profile.name)  —  \(profile.displaySummary)",
-                action: #selector(menuActivateProfile(_:)),
-                keyEquivalent: ""
-            )
-            entry.target = self
-            entry.representedObject = profile.id
-            if profile.id == store.activeProfileID { entry.state = .on }
-            submenu.addItem(entry)
-        }
-        submenu.addItem(.separator())
-        let redetect = NSMenuItem(title: "Re-detect Displays", action: #selector(redetectDisplays), keyEquivalent: "")
-        redetect.target = self
-        submenu.addItem(redetect)
-        item.submenu = submenu
-        menu.addItem(item)
-    }
-
-    @objc private func menuActivateProfile(_ sender: NSMenuItem) {
-        if let id = sender.representedObject as? UUID {
-            displays.activate(id)
-        }
-    }
-
-    @objc private func redetectDisplays() {
-        displays.resolve()
-    }
-
-    @objc private func menuSwitch(_ sender: NSMenuItem) {
-        if let id = sender.representedObject as? UUID {
-            engine.switchTo(id)
-        }
-    }
-
-    @objc private func hideUnassigned() {
-        engine.hideUnassignedApps()
-    }
-
-    @objc private func nextWorkspace() {
-        engine.switchToNext()
-    }
-
-    @objc private func previousWorkspace() {
-        engine.switchToPrevious()
-    }
-
-    @objc private func applyLayoutAction() {
-        applyActiveLayout()
     }
 
     private func applyActiveLayout() {
@@ -335,21 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LayoutEngine.apply(workspace)
     }
 
-    private func applyKeyEquivalent(_ shortcut: Shortcut, to item: NSMenuItem) {
-        item.keyEquivalent = shortcut.key.lowercased()
-        var mask: NSEvent.ModifierFlags = []
-        if shortcut.control { mask.insert(.control) }
-        if shortcut.option { mask.insert(.option) }
-        if shortcut.shift { mask.insert(.shift) }
-        if shortcut.command { mask.insert(.command) }
-        item.keyEquivalentModifierMask = mask
-    }
-
-    @objc private func openSettingsAction() {
-        openSettings()
-    }
-
-    @objc private func reloadConfig() {
+    private func reloadConfig() {
         store.reload()
         // The file may have added, removed or renamed profiles, so the live
         // one has to be matched against the hardware again.
@@ -384,6 +249,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
+        activate()
+    }
+
+    private func activate() {
         if #available(macOS 14.0, *) {
             NSApp.activate()
         } else {
@@ -392,12 +261,107 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// MARK: - Menu actions
+
+/// The other half of `StatusMenu`: it decides what the menu looks like, this
+/// answers what its rows do.
+extension AppDelegate: StatusMenuActions {
+    @objc func menuSwitchWorkspace(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID else { return }
+        engine.switchTo(id)
+    }
+
+    @objc func menuActivateProfile(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID else { return }
+        displays.activate(id)
+    }
+
+    @objc func menuRedetectDisplays() {
+        displays.resolve()
+    }
+
+    @objc func menuNextWorkspace() {
+        engine.switchToNext()
+    }
+
+    @objc func menuPreviousWorkspace() {
+        engine.switchToPrevious()
+    }
+
+    @objc func menuHideUnassigned() {
+        engine.hideUnassignedApps()
+    }
+
+    @objc func menuApplyLayout() {
+        applyActiveLayout()
+    }
+
+    /// The sticky maximize (⌥⇧M's twin). Its hold-to-peek sibling has no menu
+    /// item on purpose — a menu can't express "while held".
+    @objc func menuMaximizeWindow() {
+        maximizeHold.stick(on: frontmostWhenMenuOpened)
+    }
+
+    /// The master switch, reachable without the keyboard — which is the whole
+    /// point, since the thing it switches off is the keyboard.
+    @objc func menuToggleKeyModifications() {
+        store.config.keyModifications.toggle()
+    }
+
+    @objc func menuOpenSettings() {
+        openSettings()
+    }
+
+    @objc func menuReloadConfig() {
+        reloadConfig()
+    }
+
+    /// The standard About panel, filled in by hand: a `swift run` build has no
+    /// bundle to read a name, version or icon out of, and the dev loop is
+    /// exactly where "which build am I looking at?" gets asked.
+    @objc func menuAbout() {
+        activate()
+        let credits = NSMutableAttributedString(
+            string: "Wanted for tile rustlin'.\n",
+            attributes: [
+                .font: StatusMenu.westernFont(size: 12),
+                .foregroundColor: NSColor.labelColor,
+            ]
+        )
+        credits.append(NSAttributedString(
+            string: "A keyboard-driven workspace switcher\nthat lives in the menu bar.",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+        ))
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: "Tile Bandit",
+            .applicationVersion: Banner.version,
+            .applicationIcon: AppIconArt.image(size: 256),
+            .credits: credits,
+        ])
+    }
+}
+
+extension AppDelegate: NSMenuDelegate {
+    /// Window actions in the menu act on whatever the user was just in. By the
+    /// time a menu item fires, the menu has closed and focus has moved, so the
+    /// answer is taken here, while it's still true.
+    func menuWillOpen(_ menu: NSMenu) {
+        // Compared by pid rather than bundle id: a `swift run` build has no
+        // bundle identifier at all, so that test would match everything.
+        let front = NSWorkspace.shared.frontmostApplication
+        frontmostWhenMenuOpened = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
+    }
+}
+
 extension AppDelegate: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.action == #selector(applyLayoutAction) {
+        if menuItem.action == #selector(menuApplyLayout) {
             return engine.activeWorkspace?.hasLayout ?? false
         }
-        if menuItem.action == #selector(nextWorkspace) || menuItem.action == #selector(previousWorkspace) {
+        if menuItem.action == #selector(menuNextWorkspace) || menuItem.action == #selector(menuPreviousWorkspace) {
             return !store.workspaces.isEmpty
         }
         return true

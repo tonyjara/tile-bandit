@@ -8,7 +8,10 @@ import Foundation
 /// answer to "did it actually start?", since an accessory app shows nothing
 /// but a menu bar icon.
 enum Banner {
-    static let version = "0.1.0"
+    /// A bundled `.app` reads the version `make app` stamped into its
+    /// Info.plist; a `swift run` build has no bundle, so it falls back to the
+    /// literal — which is the number to bump alongside the plist at release.
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
 
     /// Raw string literals: the mascot's own `"""` (the bandana hem) would
     /// close an ordinary literal, and his squint is full of `\`s that would

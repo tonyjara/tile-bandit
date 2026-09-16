@@ -8,6 +8,14 @@ sourcekit-lsp, which understands SPM natively).
 
 - `swift build` / `swift run` — dev
 - `make app` — release bundle at `dist/Tile Bandit.app` (ad-hoc signed)
+- `make notarized CODESIGN_ID="Developer ID Application: … (TEAMID)"` — signed,
+  notarised, stapled zip for the Homebrew cask; prints the sha256 to paste into
+  `packaging/tile-bandit.rb`. Hardened runtime and timestamp are set there and
+  can't be added after the fact.
+- `make icon` — re-bake `Resources/AppIcon.icns` from `AppIconArt`; the result
+  is checked in, so `make app` stays a copy with no rendering step
+- `make glyphs` — contact sheet of the drawn glyphs at 16pt and up, light and
+  dark. A 16pt drawing can't be judged from source.
 
 ## Architecture (Sources/TileBandit/)
 
@@ -20,34 +28,83 @@ sourcekit-lsp, which understands SPM natively).
   styling is applied only when stdout `isatty`. Also lists the detected
   keyboards — the one piece of hardware whose detection you can't confirm by
   looking at the screen.
-- `AppDelegate.swift` — status item + menu; subscribes to config changes and
-  re-registers hotkeys / rebuilds the menu (debounced via Combine). Also owns
-  `DisplayProfileManager`: a profile change re-registers hotkeys and rebuilds
-  the menu immediately rather than waiting on the debounce, since the whole set
-  of workspace shortcuts has just changed. The menu's top item shows the live
-  profile, with a submenu to force another (useful for a desk you aren't at —
-  the next display change re-detects and takes it back) plus Re-detect
-  Displays; Reload Config re-resolves too, since the file may have renamed or
-  removed profiles. Settings… and Reload Config carry configurable hotkeys
-  too (defaults ⌥, and ⌥R) — the menu items take their key equivalents from
-  the config rather than hard-coding them, so a reassignment shows up in the
-  menu. The status item's image and title are set in
-  `rebuildMenu()` (not once at launch) so `menuBarIcon`/`showWorkspaceName`
-  changes apply live. The `MenuBarIcon` → `NSImage` extension lives here rather
-  than in Models so the model layer stays AppKit-free; `resolvedImage` falls
-  back to the default and `available` filters the picker, so a symbol this
-  macOS lacks can never leave a blank, unclickable status item.
+- `AppDelegate.swift` — status item + wiring, and the answers to the menu's
+  actions (`StatusMenuActions`); what the menu *looks* like lives in
+  StatusMenu.swift. Subscribes to config changes and re-registers hotkeys /
+  rebuilds the menu (debounced via Combine). Also owns `DisplayProfileManager`:
+  a profile change re-registers hotkeys and rebuilds the menu immediately
+  rather than waiting on the debounce, since the whole set of workspace
+  shortcuts has just changed. Reload Config re-resolves the profile too, since
+  the file may have renamed or removed profiles. The status item's image and
+  title are set in `rebuildMenu()` (not once at launch) so
+  `menuBarIcon`/`showWorkspaceName` changes apply live.
+  `rebuildMenu()` also applies `hideMenuBarIcon` (`statusItem.isVisible`), and
+  `applicationShouldHandleReopen` opens Settings — that's the escape hatch for a
+  hidden status item, since re-opening the app is the one route that still works
+  with no shortcut assigned either. `applyConfig()` reconciles the login item.
+  As `NSMenuDelegate` it notes the frontmost app in `menuWillOpen` and hands it
+  to `MaximizeHold.stick(on:)`: a menu action runs *after* the menu closed, so
+  asking who's in front at that point is a race (comparison is by pid — a
+  `swift run` build has no bundle identifier to compare).
+  `menuAbout` fills the standard About panel by hand for the same reason: no
+  bundle means no name, version or icon to read.
   Owns `KeyboardManager` and `KeyModEngine` too; a keyboard coming or going
   doesn't touch workspaces or hotkeys, so it reapplies key modifications on its
   own rather than through `applyConfig()`. `applicationWillTerminate` clears
   them: key modifications are the one thing this app leaves *on the machine*
   rather than in its own process, and a carrier key with nothing left to
   interpret it would be a dead key.
+- `StatusMenu.swift` — the menu bar menu, kept apart from AppDelegate because
+  it is the one purely *view* part of the app. Four groups, in the order you
+  need them: the brand row (Copperplate — the nearest thing macOS ships to a
+  saloon sign — opening the About panel) and the live display setup with its
+  profile submenu; Workspaces (each with a ✓ when active and a solid-vs-dashed
+  grid glyph saying whether Apply Grid Layout has anything to do there) plus
+  next/previous; Windows; then Setup. Key equivalents come from the config
+  rather than being hard-coded, so a reassignment shows up in the menu. Section
+  headers are `NSMenuItem.sectionHeader` on macOS 14+ and a styled disabled
+  item below that. The Key Modifications master switch is in the menu on
+  purpose: when a remap misfires, the keyboard is exactly the thing you can't
+  use to go fix it.
+  The `MenuBarIcon` → `NSImage` extension lives here rather than in Models so
+  the model layer stays AppKit-free; `resolvedImage` falls back to the default
+  and `available` filters the picker, so a symbol this macOS lacks can never
+  leave a blank, unclickable status item — and since the fallback is a *drawn*
+  glyph, it can't be missing either.
+  `flattened(_:into:)` is not cosmetic: AppKit won't draw a vector-backed image
+  in a menu item (an SF Symbol or a PDF template comes out blank, while a
+  drawing-handler image draws fine), so every menu icon is repainted into a
+  fixed-size bitmap-backed image first. It keeps `isTemplate`, so macOS still
+  tints it for dark menus and highlighted rows, and the uniform box is what
+  keeps the titles lined up.
+- `BanditIcons.swift` — the drawn icon set: `BanditGlyph` (star, mask, hat,
+  horseshoe, cactus, wheel) as Bézier paths in a 100×100 box, scaled to
+  whatever is asked for and marked template. An icon pack would have been a
+  dependency plus a licence, and none of them cut a sheriff star for a 16pt
+  menu bar. `Sketch` cuts holes with a `.clear` blend rather than an even-odd
+  winding rule, because the parts overlap on purpose — a hat's crown sits *on*
+  its brim, and even-odd would punch a hole where they meet. `AppIconArt` is
+  the one coloured piece (leather, bento tiles, gold star), drawn rather than
+  stored so the About panel, a bundle-less `swift run` build and the `.icns`
+  are the same artwork. The file is deliberately self-contained — AppKit and
+  nothing of ours — so `make glyphs` and `make icon` can compile it alone.
+- `LoginItem.swift` — launch at login through `SMAppService.mainApp` (macOS
+  13+): no helper bundle, no privileged install, and the Login Items entry
+  macOS shows is the app's own name. Guarded by `isSupported`, which is really
+  "are we a `.app`?" — SMAppService works off the main bundle, and a `swift run`
+  build would file the path of a build artifact as a login item. `.requiresApproval`
+  is deliberately left alone (the user switched it off in System Settings;
+  re-registering every launch would be arguing with them) and the Settings
+  toggle says so instead. Verified against an ad-hoc signed bundle — no
+  Developer ID needed for this part.
 - `Models.swift` — `Config`/`DisplayProfile`/`DisplayRef`/`Workspace`/`AppRef`/
   `Shortcut` plus the grid types (`DisplayGrid`/`GridRegion`/`GridCell`/
-  `GridSize`/`SnapSettings`) and `MenuBarIcon` (raw values *are* SF Symbol
-  names; an unknown one decodes to `.fallback` rather than throwing), Codable
-  with lenient decoding (config is hand-editable).
+  `GridSize`/`SnapSettings`) and `MenuBarIcon` (two families: `bandit.*` raw
+  values name a drawn `BanditGlyph`, everything else *is* an SF Symbol name; an
+  unknown one decodes to `.fallback`, which is a drawn glyph so it can never
+  fail to resolve; the default is the cactus), Codable with lenient decoding
+  (config is hand-editable). `hideMenuBarIcon` and `launchAtLogin` (default on)
+  live here too.
   `GridSize` also owns the cell↔rect math shared by LayoutEngine, SnapManager,
   and the settings editor (rects are AppKit coords; row 0 is the top row).
   **Workspaces live inside a `DisplayProfile`**, not at the top level, and
@@ -176,9 +233,12 @@ sourcekit-lsp, which understands SPM natively).
   menu can't express "while held"). AppDelegate calls `end()` whenever it
   tears hotkeys down (config change, shortcut recording), because the Carbon
   released event dies with the registration and the window would otherwise
-  stay stuck maximized. `stick()` is the sticky sibling (⌥⇧M): maximize and
-  leave it — it drops the saved frame first, so it also *commits* a live
-  peek rather than fighting its release.
+  stay stuck maximized. `stick(on:)` is the sticky sibling (⌥⇧M, and the
+  one of the two with a menu item): maximize and leave it — it drops the saved
+  frame first, so it also *commits* a live peek rather than fighting its
+  release. The optional app is for that menu item, which runs after the menu
+  has closed and so can't ask who's frontmost itself; a hotkey passes nothing
+  and asks in the moment.
 - `SnapManager.swift` — bentobox drag-snap: *global mouse* NSEvent monitors
   (mouse monitors are permission-free; global *key* monitors would need
   Accessibility) watch drags; holding the configured modifiers (default ⌃⌥)
@@ -313,9 +373,17 @@ sourcekit-lsp, which understands SPM natively).
   layer key was released first. Re-enables itself on `tapDisabledByTimeout`,
   which macOS fires if the tap ever blocks.
 - `SettingsView.swift` — SwiftUI settings hosted in an NSWindow
-  (NSHostingController); tabs: Workspaces, Shortcuts, Displays, Key
-  Modifications, Floating Apps, Menu Bar (icon grid over `MenuBarIcon.available` + the workspace-name toggle,
-  with a preview that mirrors the same fallback the status item uses).
+  (NSHostingController), under a poster strip (`SettingsHeader`: the app icon,
+  the name in Copperplate, the version) — the one window with room for the
+  thing to have a face. Tabs: Workspaces, Shortcuts, Displays, Key
+  Modifications, Floating Apps, General (launch at login; the show/hide
+  switches; an icon grid over `MenuBarIcon.available` split by family with a
+  heading each; a preview that mirrors the same fallback the status item uses —
+  it draws the same flattened `NSImage`s the menu does rather than
+  `Image(systemName:)`, so drawn glyphs and symbols sit in one grid). The two
+  captions under the toggles exist to stop a checkbox lying: one when macOS
+  holds the login item off, one naming the ways back in once the status item is
+  hidden.
   The follow-focus toggle sits on its own row above the Workspaces tab's
   profile picker — it's global, unlike everything below the picker.
   The Workspaces and Shortcuts tabs are scoped to one display profile via a

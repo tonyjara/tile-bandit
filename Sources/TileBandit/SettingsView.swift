@@ -16,6 +16,24 @@ struct SettingsView: View {
     @State private var profileID: UUID?
 
     var body: some View {
+        VStack(spacing: 0) {
+            SettingsHeader()
+            tabs
+        }
+        .frame(width: 720, height: 694)
+        .onAppear {
+            if profileID == nil || !store.config.profiles.contains(where: { $0.id == profileID }) {
+                profileID = store.activeProfileID ?? store.config.profiles.first?.id
+            }
+        }
+        // Follow the hardware: plug a monitor in with Settings open and the
+        // editors move to that setup's workspaces.
+        .onReceive(store.$activeProfileID) { id in
+            if let id { profileID = id }
+        }
+    }
+
+    private var tabs: some View {
         TabView {
             WorkspacesTab(store: store, recorder: recorder, profileID: $profileID)
                 .tabItem { Text("Workspaces") }
@@ -27,19 +45,46 @@ struct SettingsView: View {
                 .tabItem { Text("Key Modifications") }
             FloatingAppsTab(store: store)
                 .tabItem { Text("Floating Apps") }
-            MenuBarTab(store: store)
-                .tabItem { Text("Menu Bar") }
+            GeneralTab(store: store)
+                .tabItem { Text("General") }
         }
-        .frame(width: 720, height: 640)
-        .onAppear {
-            if profileID == nil || !store.config.profiles.contains(where: { $0.id == profileID }) {
-                profileID = store.activeProfileID ?? store.config.profiles.first?.id
+    }
+}
+
+/// The poster strip above the tabs. Decoration, and the only window in the app
+/// with room for the thing to have a face — the menu bar gets 16 points.
+private struct SettingsHeader: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(nsImage: AppIconArt.image(size: 34))
+                VStack(alignment: .leading, spacing: 1) {
+                    // Copperplate is the closest thing macOS ships to a saloon
+                    // sign; .custom falls back to the system face on its own if
+                    // a machine hasn't got it.
+                    Text("Tile Bandit")
+                        .font(.custom("Copperplate", size: 17))
+                        .tracking(1.1)
+                    Text("wanted · for tile rustlin'")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("v\(Banner.version)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.tertiary)
             }
-        }
-        // Follow the hardware: plug a monitor in with Settings open and the
-        // editors move to that setup's workspaces.
-        .onReceive(store.$activeProfileID) { id in
-            if let id { profileID = id }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 11)
+            .frame(maxWidth: .infinity)
+            .background(
+                LinearGradient(
+                    colors: [Color(red: 0.44, green: 0.27, blue: 0.16).opacity(0.22), .clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            Divider()
         }
     }
 }
@@ -1140,57 +1185,146 @@ struct FloatingAppsTab: View {
     }
 }
 
-// MARK: - Menu Bar
+// MARK: - General
 
-struct MenuBarTab: View {
+struct GeneralTab: View {
     @ObservedObject var store: ConfigStore
 
-    private let columns = [GridItem(.adaptive(minimum: 72), spacing: 10)]
+    private let columns = [GridItem(.adaptive(minimum: 78), spacing: 10)]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("The icon Tile Bandit shows in the menu bar. Changes apply straight away.")
-                .foregroundStyle(.secondary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                startup
+                menuBar
+            }
+            .padding(16)
+        }
+    }
 
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
-                // Only symbols this macOS actually ships — see MenuBarIcon.available.
-                ForEach(MenuBarIcon.available) { icon in
-                    MenuBarIconChoice(icon: icon, isSelected: icon == store.config.menuBarIcon) {
-                        store.config.menuBarIcon = icon
-                    }
+    // MARK: Startup
+
+    private var startup: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Startup").font(.headline)
+            Toggle("Launch Tile Bandit at login", isOn: $store.config.launchAtLogin)
+                .disabled(!LoginItem.isSupported)
+            if let note = loginNote {
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// Says so when the config and macOS disagree, rather than showing a
+    /// checkbox that quietly isn't in charge.
+    private var loginNote: String? {
+        if !LoginItem.isSupported {
+            return "Only an installed .app can register itself — this build is running straight from the terminal, so the setting is remembered but not applied."
+        }
+        if LoginItem.status == .requiresApproval {
+            return "macOS is holding this one: turn Tile Bandit on in System Settings ▸ General ▸ Login Items."
+        }
+        return nil
+    }
+
+    // MARK: Menu bar
+
+    private var menuBar: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Menu Bar").font(.headline)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Show Tile Bandit in the menu bar", isOn: Binding(
+                    get: { !store.config.hideMenuBarIcon },
+                    set: { store.config.hideMenuBarIcon = !$0 }
+                ))
+                if store.config.hideMenuBarIcon {
+                    Text(hiddenNote)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
             Toggle("Show the active workspace's name next to the icon", isOn: $store.config.showWorkspaceName)
+                .disabled(store.config.hideMenuBarIcon)
 
-            GroupBox {
-                HStack(spacing: 4) {
-                    Image(systemName: previewIcon.rawValue)
-                    if store.config.showWorkspaceName {
-                        Text(previewName)
+            // Two families, labelled: the drawn set and the system one.
+            // Only symbols this macOS actually ships — see MenuBarIcon.available.
+            ForEach(MenuBarIcon.Family.allCases, id: \.self) { family in
+                let icons = MenuBarIcon.available.filter { $0.family == family }
+                if !icons.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(family.title).font(.subheadline.weight(.semibold))
+                            Text(family.caption).font(.caption).foregroundStyle(.secondary)
+                        }
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+                            ForEach(icons) { icon in
+                                MenuBarIconChoice(icon: icon, isSelected: icon == store.config.menuBarIcon) {
+                                    store.config.menuBarIcon = icon
+                                }
+                            }
+                        }
                     }
                 }
-                .font(.system(size: 14))
-                .padding(.vertical, 6)
+            }
+            .disabled(store.config.hideMenuBarIcon)
+
+            GroupBox {
+                HStack(spacing: 5) {
+                    if store.config.hideMenuBarIcon {
+                        Text("Hidden").foregroundStyle(.secondary)
+                    } else {
+                        MenuBarImage(icon: previewIcon, size: 16)
+                        if store.config.showWorkspaceName {
+                            Text(previewName)
+                        }
+                    }
+                }
+                .font(.system(size: 13))
+                .padding(.vertical, 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 4)
+                .padding(.horizontal, 6)
             } label: {
                 Text("Preview").font(.headline)
             }
-
-            Spacer()
         }
-        .padding(16)
+    }
+
+    /// Hiding the icon takes the menu away, so the note has to name what's
+    /// left — including the route that works with no shortcut assigned at all.
+    private var hiddenNote: String {
+        let reopen = "Opening Tile Bandit again (Finder or Spotlight) always reopens Settings."
+        guard let shortcut = store.config.openSettingsShortcut else { return reopen }
+        return "\(shortcut.display) still opens Settings. \(reopen)"
     }
 
     /// A hand-edited config can name a symbol that doesn't resolve; the status
     /// item falls back, so the preview has to show the same thing.
     private var previewIcon: MenuBarIcon {
-        store.config.menuBarIcon.image == nil ? .fallback : store.config.menuBarIcon
+        store.config.menuBarIcon.image() == nil ? .fallback : store.config.menuBarIcon
     }
 
     private var previewName: String {
         store.workspaces.first?.name ?? "Workspace"
+    }
+}
+
+/// One menu bar icon, drawn the way the status item draws it — through the
+/// same `NSImage`, so a drawn glyph and an SF Symbol can sit in one grid.
+private struct MenuBarImage: View {
+    let icon: MenuBarIcon
+    var size: CGFloat = 18
+
+    var body: some View {
+        if let image = icon.menuImage(size: size) {
+            Image(nsImage: image)
+                .renderingMode(.template)
+        }
     }
 }
 
@@ -1201,14 +1335,14 @@ private struct MenuBarIconChoice: View {
 
     var body: some View {
         Button(action: select) {
-            VStack(spacing: 4) {
-                Image(systemName: icon.rawValue)
-                    .font(.system(size: 18))
+            VStack(spacing: 5) {
+                MenuBarImage(icon: icon, size: 20)
+                    .frame(height: 20)
                 Text(icon.label)
                     .font(.caption2)
                     .lineLimit(1)
             }
-            .frame(width: 72, height: 52)
+            .frame(width: 78, height: 54)
             .background(
                 RoundedRectangle(cornerRadius: 6)
                     .fill(isSelected ? Color.accentColor.opacity(0.22) : Color.secondary.opacity(0.10))

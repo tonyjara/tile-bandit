@@ -1,4 +1,4 @@
-# Tile Bandit
+<div align="center">
 
 ```
          _________
@@ -6,7 +6,7 @@
         |~~~~~~~~~|
      ___|_________|___
    _(_________________)_
-  (_____________________)   Tile Bandit
+  (_____________________)   TILE BANDIT
        | \_o)   (o_/ |      menu-bar workspace switcher
        .-'"""""""""'-.      wanted · for tile rustlin'
         \ \/\/\/\/\ /
@@ -16,140 +16,216 @@
             '-.-'
 ```
 
-A fast, keyboard-driven workspace switcher for macOS that lives in your menu bar.
-Inspired by [FlashSpace](https://github.com/wojciech-kulik/FlashSpace).
+**A keyboard-driven workspace switcher for macOS that lives in the menu bar.**
+No Spaces, no slide animation, no waiting.
 
-Instead of macOS Spaces (with their slow slide animation), Tile Bandit treats
-**workspaces as groups of apps**, grouped in turn by **display profile** — the
-laptop on its own, the laptop plus a monitor, the lid closed on a big display
-each get their own set. Switching to a workspace simply:
+</div>
+
+---
+
+Tile Bandit treats **workspaces as groups of apps**. Switching to one:
 
 1. unhides the apps that belong to it,
 2. hides every other app (floating apps excepted),
-3. focuses the app you were last in there (its first app, the first time).
+3. focuses whatever you were last in there.
 
-No animation, no waiting — and crucially, **windows never move**. An app that
-belongs to two workspaces (or is in the Floating list) is left completely alone
-during a switch: it stays visible, exactly where it was.
+**Windows never move during a switch.** An app in two workspaces — your
+browser, your terminal — stays exactly where it is when you flip between them.
+Window *tiling* exists too, but only ever when you ask for it.
 
-## Status: MVP
+Workspaces are grouped by **display profile**: the laptop on its own, the
+laptop plus a monitor, the lid closed on a big display — each setup gets its
+own workspaces, its own shortcuts and its own grids, and Tile Bandit switches
+between them automatically when you plug or unplug a screen.
 
-Does: display profiles (auto-detected), workspaces, per-workspace apps, global
-hotkeys, floating apps, menu bar switcher (with a pickable icon), grid tiling
-(Apply Grid Layout plus modifier-drag snapping), SwiftUI settings (including a
-Shortcuts tab with a key-press debugger), hand-editable JSON config, and a
-**Hide Unassigned Apps**
-action (default ⌥0, also in the menu) that hides everything outside the active
-workspace — it runs automatically at launch too.
-Doesn't (yet): launch at login.
+It also does the Karabiner half of the job: **per-keyboard key modifications**,
+including dual-role keys and chords.
 
-Only the window-moving parts (Apply Grid Layout and drag-snap) need the
-Accessibility permission. Switching, hotkeys and display detection are
-permission-free: they hide/unhide whole apps (`NSRunningApplication`), use
-Carbon `RegisterEventHotKey`, and read `NSScreen` metadata.
+Requires macOS 13 or newer. Zero third-party dependencies.
+
+## Install
+
+```sh
+brew install --cask tonyjara/tap/tile-bandit
+```
+
+Signed and notarised, so it opens without a Gatekeeper detour, and
+`brew upgrade --cask tile-bandit` keeps it current. Because the signature is
+stable across releases, macOS keeps the Accessibility grant through an upgrade
+rather than making you approve it again.
+
+The app is menu-bar only — no Dock icon, no window at launch. The first launch
+opens Settings: add a workspace, add apps to it, press its shortcut. It starts
+with your machine unless you turn that off in Settings ▸ General.
+
+To remove it, `brew uninstall --cask tile-bandit`, or
+`brew uninstall --zap --cask tile-bandit` to take `~/.config/tilebandit` with it.
+
+<details>
+<summary><b>Building from source instead</b></summary>
+
+A Swift toolchain is all you need — `xcode-select --install`; the Xcode IDE is
+*not* required.
+
+```sh
+git clone https://github.com/tonyjara/tile-bandit.git && cd tile-bandit
+make app                       # → dist/Tile Bandit.app
+cp -R "dist/Tile Bandit.app" /Applications/
+open "/Applications/Tile Bandit.app"
+```
+
+`make app` signs ad-hoc, and macOS ties the Accessibility permission to the
+signature — so every rebuild asks for it again. Pass a stable identity to keep
+the grant:
+
+```sh
+make app CODESIGN_ID="Apple Development: you@example.com (TEAMID)"
+```
+
+For the dev loop, granting Accessibility to your *terminal* is easier still:
+processes launched from it inherit the grant, so it survives rebuilds.
+
+</details>
+
+## Permissions
+
+Most of Tile Bandit needs nothing at all. Two features do:
+
+| Feature | Needs | Why |
+| --- | --- | --- |
+| Apply Grid Layout, drag-snap | Accessibility | Moving another app's windows is an Accessibility API |
+| Dual-role keys, chords | Accessibility | They run on a `CGEventTap` |
+| Everything else | — | Hiding apps, hotkeys, display detection, plain key remaps |
+
+Plain 1:1 key remaps go through `hidutil` at the HID layer, which needs no
+permission and works *below* secure input — so they keep working in password
+fields. Only a key that means one thing tapped and another held needs the tap.
+
+## Shortcuts
+
+Defaults, all reassignable in Settings → Shortcuts:
+
+| | |
+| --- | --- |
+| `⌥1` … `⌥9` | Switch to workspace 1–9 |
+| `⌥P` / `⌥N` | Next / previous workspace |
+| `⌥0` | Hide unassigned apps |
+| `⌥L` | Apply grid layout |
+| `⌥M` | Maximize focused window **while held** (release restores it) |
+| `⌥⇧M` | Maximize focused window and leave it |
+| `⌥,` | Settings |
+| `⌥R` | Reload config |
+| `⌃⌥` + drag | Snap a window to the grid (add `⇧` to span cells) |
+
+Shortcuts need at least one modifier — a bare key would swallow normal typing
+system-wide.
 
 ## Display profiles
 
 Tile Bandit recognises which screens are attached and switches to that setup's
-workspaces automatically. Each setup — MacBook alone, MacBook + external, lid
-closed on a Studio Display — is a **display profile** with its own workspaces,
-its own hotkey assignments and its own grids — one grid *per display* — so a
-3×2 bento on the big monitor doesn't follow you onto the 14".
+workspaces on its own.
 
 - Profiles are **created automatically** the first time a setup is seen, named
   from the displays themselves ("MacBook", "MacBook + M14", "Studio Display"),
-  and **seeded with a copy of the profile you were just on** — plug in a monitor
-  and your workspaces are already there, ready to be re-tiled. Names are
-  editable in Settings → Displays.
-- Plugging or unplugging a screen restores the workspace you last used in that
-  profile; the first time, it lands on the same-named workspace as the one you
-  were in (the copies line up), and if there's no match it leaves your windows
-  alone.
-- Displays are recognised by EDID vendor/model/serial (built-in panels just by
-  being built-in), not by macOS's per-session display IDs, so unplugging and
-  replugging the same monitor is the same profile. Rearranging displays in
-  System Settings isn't a new setup either.
-- The menu bar shows the live profile at the top, with a submenu to force a
-  different one — handy for configuring a desk you aren't sitting at. The next
-  display change re-detects and takes it back.
+  and **seeded with a copy of the profile you were just on** — plug in a
+  monitor and your workspaces are already there, ready to be re-tiled.
+- Plugging or unplugging restores the workspace you last used in that profile;
+  the first time, it lands on the same-named workspace as the one you were in,
+  and if there's no match it leaves your windows alone.
+- Displays are recognised by EDID vendor/model/serial, not by macOS's
+  per-session display IDs — so unplugging and replugging the same monitor is
+  the same profile, and rearranging displays in System Settings isn't a new
+  setup either.
+- The menu bar shows the live profile, with a submenu to force a different one
+  — handy for configuring a desk you aren't sitting at. The next display change
+  re-detects and takes it back.
 
 Settings → **Displays** lists what's attached (with the identifiers detection
-uses), which profile matched, and lets you rename, duplicate, delete, or point a
-profile at the displays attached right now.
+uses), which profile matched, and lets you rename, duplicate, delete or bind a
+profile to the displays attached right now.
 
 ## Grid layout
 
-A workspace holds **one grid per display** in its profile. That's how you say
-"in this workspace, the editor and terminal go side by side on the big monitor
-and Slack fills the laptop" — each screen gets its own dimensions and its own
-app placements.
+A workspace holds **one grid per display**. That's how you say "in this
+workspace the editor and terminal go side by side on the big monitor and Slack
+fills the laptop".
 
-In Settings → **Workspaces**, the Grid Layout section has a display picker
-(when the profile has more than one screen). Pick a display, set its columns
-and rows, then drag app chips onto the grid; drag a tile to move it, its corner
-dot to span cells, ✕ to take it off. An app placed on another monitor's grid
-shows up as a dimmed chip labelled with that display — drag it over and it
-*moves* there. An app lives on one display at a time.
+In Settings → **Workspaces**, pick a display, set its columns and rows, then
+drag app chips onto the grid; drag a tile to move it, its corner dot to span
+cells, ✕ to take it off. An app placed on another monitor's grid shows up as a
+dimmed chip labelled with that display — drag it over and it *moves* there. An
+app lives on one display at a time.
 
-**Apply Grid Layout** (default ⌥L, also in the menu) then moves each placed
-app's windows to the display it's assigned to and sizes them to their cells.
-This is the only thing that moves a window between screens, and it only ever
-runs when you ask for it: switching workspaces still never moves a window.
+**Apply Grid Layout** (`⌥L`) then moves each placed app's windows to the
+display it's assigned to and sizes them to their cells. This is the only thing
+that moves a window between screens, and it only runs when you ask.
 
-Drag-snapping follows the same per-display grids — hold ⌃⌥ while dragging a
-window and you get the grid belonging to the screen you're over, switching as
-you cross onto another one. A display the workspace has nothing laid out on
-falls back to the default dimensions in Settings.
+**Drag-snapping** follows the same per-display grids: hold `⌃⌥` while dragging
+a window and you get the grid belonging to the screen you're over, switching as
+you cross onto another one. The highlight is the single cell under the cursor;
+hold `⇧` as well to span from where you pressed it. A display the workspace has
+nothing laid out on falls back to the default dimensions in Settings.
 
-## Run it
+## Key modifications
 
-Requirements: macOS 13+ and a Swift toolchain (`xcode-select --install` is
-enough — the Xcode IDE is *not* required).
+The Karabiner-shaped half, filed per keyboard — which map is live depends on
+what you're typing on, and every attached keyboard's map is live at once.
 
-```sh
-swift run     # dev build + launch; the menu bar icon appears
-make dev      # auto-rebuild & relaunch on file changes (needs watchexec)
-make app      # release build → dist/Tile Bandit.app
-```
+- **Remaps** — caps lock → escape, say. Applied with `hidutil`: no permission,
+  no root, and below secure input.
+- **Dual-role keys** — tap for one key, hold for a modifier set (`hyper` is
+  shorthand for ⌃⌥⇧⌘). Needs Accessibility.
+- **Chords** — rewrite a key-plus-modifiers into another, or into nothing,
+  which is how a combination gets *disabled* (⌘H is the usual candidate).
+  Chords hung off a hold are device-scoped and only live while that key is
+  down; chords in the top-level `chords` list apply whatever you're typing on.
+- A keyboard Tile Bandit has never seen is filed automatically, cloned from the
+  most recently edited profile — so a new board inherits the map you've been
+  tuning. With no profiles at all it stays empty: a first run invents nothing.
 
-Launched from a terminal it prints the mascot above along with your config
-path and whether Accessibility is granted — an accessory app is otherwise
-silent, so that's how you know it came up. (A `.app` opened from Finder has
-nowhere to print; look for the menu bar icon instead.)
+Nothing outlives the app: quitting hands every keyboard back unmodified, and
+the menu bar has a master switch for when a mapping misbehaves and the keyboard
+is the thing you can't use to go fix it.
 
-There is no hot reload — quit the running instance before starting a new one
-(two instances mean two menu bar icons fighting over the same hotkeys).
-
-First run opens Settings automatically:
-
-1. Add a workspace — it gets ⌥1, ⌥2, … by default.
-2. Add apps to it ("Add App" lists running apps, or browse /Applications).
-3. Press the hotkey.
-
-Tip: add the same app (your browser, your terminal) to several workspaces — it
-stays visible and keeps its position when you switch between them. Apps in the
-**Floating Apps** tab are visible in *every* workspace.
+Settings → **Key Modifications** has a **key debugger** too: press a key and it
+tells you exactly what macOS delivered, what the key is called in the config,
+and whether it's usable as a global shortcut.
 
 ## Menu bar
 
-The status item shows the icon plus the name of the workspace you're in.
-Settings → **Menu Bar** swaps the icon for any of a dozen SF Symbols (grids,
-windows, a stack, a bandit mask) and can drop the workspace name if you'd
-rather keep the menu bar narrow — the icon alone still opens the menu. Changes
-land immediately, no relaunch.
+The status item shows an icon plus the name of the workspace you're in, and the
+menu is grouped the way you use it: the live display setup at the top,
+workspaces, window actions, then setup.
 
-In JSON that's `menuBarIcon` (an SF Symbol name) and `showWorkspaceName`. A
-symbol your macOS doesn't ship falls back to the default grid rather than
-leaving an invisible menu bar item, so hand-editing it is safe.
+Settings → **General** swaps the icon. There are two families:
+
+- **Wanted** — a sheriff star, a bandit mask, a ten-gallon hat, a horseshoe, a
+  cactus and a wagon wheel, drawn as Bézier paths right in the app, so they're
+  sharp at any size and can't go missing.
+- **Plain** — a dozen SF Symbols, for a menu bar without opinions.
+
+The default is the cactus. The workspace name can be dropped if you'd rather
+keep the menu bar narrow, and the status item can be **hidden altogether** —
+hotkeys carry on working, and opening Tile Bandit again (Finder, Spotlight)
+always reopens Settings, so hiding it can't lock you out even with no shortcut
+assigned. Changes apply immediately, no relaunch.
+
+**Launch at login** is on by default, on the same tab. It's registered with
+`SMAppService`, so macOS lists Tile Bandit under System Settings ▸ General ▸
+Login Items — and if you switch it off there, Tile Bandit takes the hint rather
+than re-registering itself on every launch. Only an installed `.app` can
+register; a `swift run` build says so instead of pretending.
 
 ## Config
 
-Everything lives in `~/.config/tilebandit/config.json`. Edit it by hand if you
-like, then hit **Reload Config** in the menu bar.
+Everything lives in `~/.config/tilebandit/config.json` — hand-editable, then
+**Reload Config** (`⌥R`) in the menu. Decoding is lenient on purpose: an
+unknown icon name, an unknown key name or a missing field falls back instead of
+throwing the file out.
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "profiles": [
     {
       "id": "9C2A1B44-0000-4000-8000-000000000001",
@@ -163,108 +239,104 @@ like, then hit **Reload Config** in the menu bar.
           "id": "5E1F0E56-3C63-4E8B-9B6A-000000000000",
           "name": "Code",
           "apps": [
-            { "bundleId": "com.apple.Terminal", "name": "Terminal", "path": "/System/Applications/Utilities/Terminal.app" }
+            { "bundleId": "com.apple.Terminal", "name": "Terminal" }
           ],
-          "shortcut": { "key": "1", "control": false, "option": true, "shift": false, "command": false },
-          "launchMissingApps": false,
+          "shortcut": { "key": "1", "option": true },
           "grids": [
             {
               "displayKey": "edid:12462-25053-0",
               "columns": 2,
               "rows": 2,
-              "layout": { "com.apple.Terminal": { "col": 0, "row": 0, "colSpan": 1, "rowSpan": 2 } }
-            },
-            { "displayKey": "builtin", "columns": 1, "rows": 1, "layout": {} }
+              "layout": {
+                "com.apple.Terminal": { "col": 0, "row": 0, "colSpan": 1, "rowSpan": 2 }
+              }
+            }
           ]
         }
       ]
     }
   ],
   "floatingApps": [],
-  "menuBarIcon": "square.grid.2x2.fill",
+  "keyboards": [],
+  "chords": [],
+  "menuBarIcon": "bandit.cactus",
   "showWorkspaceName": true,
-  "hideUnassignedShortcut": { "key": "0", "control": false, "option": true, "shift": false, "command": false }
+  "hideMenuBarIcon": false,
+  "launchAtLogin": true,
+  "followFocusedApp": true
 }
 ```
 
-Workspaces live inside a profile; `displays` is the fingerprint that profile
-matches (a `displays: []` profile is unbound and matches nothing until you bind
-it in Settings → Displays). Each workspace's `grids` has one entry per display,
-tied to the profile's `displays[].key`; an entry with an empty `displayKey` is
-unbound and applies wherever a window already is.
+- Workspaces live **inside a profile**; `displays` is the fingerprint that
+  profile matches. A profile with `displays: []` is unbound and matches nothing
+  until you bind it in Settings → Displays.
+- Each workspace's `grids` has one entry per display, tied to
+  `displays[].key`. It's sparse — a display nobody has laid anything out on has
+  no entry.
+- Apps in **Floating Apps** are visible in every workspace and are never hidden
+  by a switch.
+- `launchAtLogin` (default on) and `hideMenuBarIcon` (default off) are the two
+  switches on the General tab.
+- `followFocusedApp` (default on): focusing an app that belongs to another
+  workspace — Cmd-Tab, Spotlight, a Dock click — switches to that workspace
+  rather than leaving one window stranded over the one you're in.
+- Any shortcut can be set to `null` to disable it.
 
-Older configs are migrated on read, and the current shape is written back on
-the next save:
-
-- `version: 1` (a top-level `workspaces` list) moves its workspaces into a
-  profile bound to whatever displays are attached at that moment, named after
-  them.
-- `version: 2` (one `gridColumns`/`gridRows`/`layout` per workspace) gives that
-  grid to *every* display in the profile rather than guessing which monitor you
-  meant, so your old layout shows up on each screen and you delete what doesn't
-  belong there.
-
-Nothing is lost either way — apps, shortcuts and placements all come along.
-
-`hideUnassignedShortcut` triggers the cleanup action: with a workspace active
-it hides everything outside that workspace (great for "I pulled up a couple of
-random apps, now take me back"); with none active it hides apps that aren't in
-*any* workspace. Set it to `null` to disable.
-
-Shortcuts must include at least one modifier (a bare key would swallow normal
-typing system-wide). Keys `0–9` and `a–z` work; the UI offers digits, letters
-are available via the JSON.
-
-The **Shortcuts** tab lists every action — Hide Unassigned Apps plus one switch
-action per workspace — with editable shortcuts, and a **Key Debugger**: hit
-"Start Listening" and it shows the exact modifiers and key macOS delivers, the
-raw keyCode, and whether the combo is usable as a shortcut. Registered global
-hotkeys show up as fired actions (e.g. "⌥1 — Switch to Code"). It stays on
-until you stop it; keys are only swallowed while the Shortcuts tab itself is
-visible, so typing elsewhere keeps working. It sees ordinary key presses only
-while a Tile Bandit window is focused — that's what keeps it permission-free.
+Older configs are migrated on read and written back in the current shape on the
+next save; nothing is lost. `version: 1` (a flat `workspaces` list) becomes a
+profile bound to whatever is attached, and `version: 2`'s single grid per
+workspace is copied onto every display in its profile.
 
 ## Development
 
-Pure Swift Package Manager — there is no `.xcodeproj`. That makes it
-first-class in **neovim**: `sourcekit-lsp` ships with the Swift toolchain and
-understands SPM packages natively, so with `nvim-lspconfig`'s `sourcekit`
-server you get completion and diagnostics with zero extra setup. (Xcode users
-can still `open Package.swift`.)
+Pure Swift Package Manager — there is no `.xcodeproj`, which is what makes it
+first-class in **neovim**: `sourcekit-lsp` ships with the toolchain and
+understands SPM natively. (Xcode users can still `open Package.swift`.)
+
+```sh
+swift run     # dev build + launch; prints the mascot, config path and permission state
+make dev      # auto-rebuild & relaunch on change (needs watchexec)
+make app      # release build → dist/Tile Bandit.app
+make icon     # re-bake Resources/AppIcon.icns from the drawing in BanditIcons.swift
+make glyphs   # contact sheet of the drawn menu bar glyphs, light and dark
+```
+
+There's no hot reload — quit the running instance before starting a new one, or
+two menu bar icons will fight over the same hotkeys. For development, grant
+Accessibility to your *terminal*: processes launched from it inherit that
+grant, so it survives rebuilds.
 
 ```
 Sources/TileBandit/
-├── main.swift             NSApplication bootstrap (accessory app, no Dock icon)
-├── Banner.swift           the ASCII hello printed on a terminal launch
-├── AppDelegate.swift      status item, menu, config → hotkeys/menu wiring
-├── Models.swift           Config / DisplayProfile / Workspace / Shortcut (Codable)
-├── DisplayProfiles.swift  display fingerprinting + auto profile detection
-├── ConfigStore.swift      ObservableObject + debounced JSON autosave
-├── WorkspaceEngine.swift  the actual switching: unhide → hide → focus
-├── LayoutEngine.swift     AX window moving (the one part needing permission)
-├── SnapManager.swift      modifier-drag snap-to-grid + overlay
-├── HotkeyManager.swift    Carbon RegisterEventHotKey wrapper (no permissions)
-├── KeyDebugger.swift      local key-press monitor for the Shortcuts tab
-├── ShortcutRecorder.swift captures a combo for the Reassign buttons
-└── SettingsView.swift     SwiftUI settings window
+├── main.swift               NSApplication bootstrap (accessory app, no Dock icon)
+├── Banner.swift             the ASCII hello printed on a terminal launch
+├── AppDelegate.swift        status item, wiring, menu actions
+├── StatusMenu.swift         what the menu bar menu looks like
+├── BanditIcons.swift        the drawn glyph set + the app icon artwork
+├── LoginItem.swift          launch at login, via SMAppService
+├── Models.swift             Config / DisplayProfile / Workspace / Shortcut (Codable)
+├── ConfigStore.swift        ObservableObject + debounced JSON autosave
+├── DisplayProfiles.swift    display fingerprinting + profile detection
+├── WorkspaceEngine.swift    the actual switching: unhide → hide → focus
+├── LayoutEngine.swift       AX window moving + maximize
+├── SnapManager.swift        modifier-drag snap-to-grid + overlay
+├── HotkeyManager.swift      Carbon RegisterEventHotKey wrapper
+├── HIDKeys.swift            the key table: config name ↔ HID usage ↔ keycode
+├── Keyboards.swift          keyboard detection (IOKit registry, properties only)
+├── KeyRemapper.swift        hidutil remaps + the plan both engines share
+├── DualRoleTap.swift        the CGEventTap: tap-vs-hold and chords
+├── KeyDebugger.swift        "what key is this, really?"
+├── ShortcutRecorder.swift   captures a combo for the Reassign buttons
+├── SettingsView.swift       SwiftUI settings window
+└── KeyModificationsTab.swift  … and its biggest tab
 ```
 
 ## Roadmap
 
-Done since the first cut: window tiling via the Accessibility API, drag-snap,
-per-display workspaces (display profiles), a grid per display inside each
-workspace, a shortcut recorder, per-workspace focus memory, and a pickable menu
-bar icon.
-
-- Launch at login.
-- Option to *keep* unassigned apps visible during switches (current behavior
-  hides everything outside the target workspace).
-- Persist the last workspace per profile across relaunches (it's in-memory
-  today, so it survives replugging a monitor but not quitting the app).
-
-A stable codesigning identity is worth setting up now that tiling needs
-Accessibility: ad-hoc-signed rebuilds reset the TCC grant every time (see
-`CODESIGN_ID` in the Makefile).
+- A signed, notarised release with automatic updates.
+- Option to *keep* unassigned apps visible during switches.
+- Persist the last workspace per profile across relaunches (it survives
+  replugging a monitor today, but not quitting).
 
 ## Credits
 

@@ -456,12 +456,25 @@ struct DisplayProfile: Codable, Equatable, Hashable, Identifiable {
     }
 }
 
-/// The status item's icon. Raw values are SF Symbol names, so the enum
-/// doubles as the symbol lookup — and because a hand-edited config (or an
+/// The status item's icon, in two families.
+///
+/// The drawn set's raw values are `bandit.*` names that `BanditGlyph` renders
+/// from Bézier paths; every other raw value *is* an SF Symbol name, so the
+/// enum doubles as the symbol lookup. Because a hand-edited config (or an
 /// older macOS missing a symbol) can name one that doesn't resolve, every
-/// lookup goes through `image`, which falls back to the default rather than
-/// leaving an invisible menu bar item.
+/// lookup goes through `resolvedImage`, which falls back to the default rather
+/// than leaving an invisible menu bar item. The default is a drawn glyph for
+/// that same reason: a drawing can't be missing from the system.
 enum MenuBarIcon: String, Codable, CaseIterable, Identifiable {
+    // Drawn here — see BanditIcons.swift.
+    case star = "bandit.star"
+    case mask = "bandit.mask"
+    case hat = "bandit.hat"
+    case horseshoe = "bandit.horseshoe"
+    case cactus = "bandit.cactus"
+    case wheel = "bandit.wheel"
+
+    // SF Symbols, for anyone who'd rather their menu bar didn't have opinions.
     case grid = "square.grid.2x2.fill"
     case gridOutline = "square.grid.2x2"
     case gridDense = "square.grid.3x3.fill"
@@ -473,9 +486,9 @@ enum MenuBarIcon: String, Codable, CaseIterable, Identifiable {
     case stack = "square.stack.3d.up.fill"
     case sidebar = "sidebar.squares.left"
     case bolt = "bolt.fill"
-    case mask = "theatermasks.fill"
+    case theaterMasks = "theatermasks.fill"
 
-    static let fallback = MenuBarIcon.grid
+    static let fallback = MenuBarIcon.cactus
 
     var id: String { rawValue }
 
@@ -486,8 +499,37 @@ enum MenuBarIcon: String, Codable, CaseIterable, Identifiable {
         self = MenuBarIcon(rawValue: raw) ?? .fallback
     }
 
+    /// Which half of the set this is. The name is all the model layer knows:
+    /// resolving it to a drawing is AppKit's job, and Models stays AppKit-free.
+    enum Family: String, CaseIterable {
+        case drawn, symbol
+
+        /// The picker's section headings.
+        var title: String { self == .drawn ? "Wanted" : "Plain" }
+        var caption: String {
+            self == .drawn
+                ? "Drawn for this app — sharp at any size."
+                : "SF Symbols, for a menu bar without opinions."
+        }
+    }
+
+    private static let drawnPrefix = "bandit."
+
+    var family: Family { rawValue.hasPrefix(Self.drawnPrefix) ? .drawn : .symbol }
+
+    /// The `BanditGlyph` name for a drawn icon, nil for an SF Symbol.
+    var glyphName: String? {
+        family == .drawn ? String(rawValue.dropFirst(Self.drawnPrefix.count)) : nil
+    }
+
     var label: String {
         switch self {
+        case .star: return "Star"
+        case .mask: return "Mask"
+        case .hat: return "Hat"
+        case .horseshoe: return "Horseshoe"
+        case .cactus: return "Cactus"
+        case .wheel: return "Wheel"
         case .grid: return "Grid"
         case .gridOutline: return "Grid (outline)"
         case .gridDense: return "Dense grid"
@@ -499,7 +541,7 @@ enum MenuBarIcon: String, Codable, CaseIterable, Identifiable {
         case .stack: return "Stack"
         case .sidebar: return "Sidebar"
         case .bolt: return "Bolt"
-        case .mask: return "Bandit"
+        case .theaterMasks: return "Theatre"
         }
     }
 }
@@ -534,6 +576,14 @@ struct Config: Codable, Equatable {
     /// icon unless you'd rather keep the menu bar narrow.
     var menuBarIcon: MenuBarIcon
     var showWorkspaceName: Bool
+    /// Take the status item out of the menu bar altogether. Hotkeys carry on —
+    /// and re-opening Tile Bandit always brings Settings back, which is what
+    /// makes this safe to switch on with no shortcut set.
+    var hideMenuBarIcon: Bool
+    /// Start with the machine. On by default: a workspace switcher you have to
+    /// remember to launch is a workspace switcher you stop using. Only means
+    /// anything to an installed `.app` — see LoginItem.
+    var launchAtLogin: Bool
     /// Focusing an app that belongs to another workspace (Cmd-Tab, Spotlight,
     /// the Dock — all of which unhide it) switches to that workspace instead
     /// of leaving one stray window floating over the one you're in.
@@ -558,7 +608,7 @@ struct Config: Codable, Equatable {
         case maximizeHoldShortcut, maximizeShortcut
         case nextWorkspaceShortcut, previousWorkspaceShortcut
         case openSettingsShortcut, reloadConfigShortcut, snap
-        case menuBarIcon, showWorkspaceName, followFocusedApp
+        case menuBarIcon, showWorkspaceName, hideMenuBarIcon, launchAtLogin, followFocusedApp
         case keyboards, keyModifications, chords
         /// v1 only, read for migration and never written back.
         case workspaces
@@ -579,6 +629,8 @@ struct Config: Codable, Equatable {
         snap: SnapSettings = SnapSettings(),
         menuBarIcon: MenuBarIcon = .fallback,
         showWorkspaceName: Bool = true,
+        hideMenuBarIcon: Bool = false,
+        launchAtLogin: Bool = true,
         followFocusedApp: Bool = true,
         keyboards: [KeyboardProfile] = [],
         keyModifications: Bool = true,
@@ -598,6 +650,8 @@ struct Config: Codable, Equatable {
         self.snap = snap
         self.menuBarIcon = menuBarIcon
         self.showWorkspaceName = showWorkspaceName
+        self.hideMenuBarIcon = hideMenuBarIcon
+        self.launchAtLogin = launchAtLogin
         self.followFocusedApp = followFocusedApp
         self.keyboards = keyboards
         self.keyModifications = keyModifications
@@ -633,6 +687,8 @@ struct Config: Codable, Equatable {
         snap = try container.decodeIfPresent(SnapSettings.self, forKey: .snap) ?? SnapSettings()
         menuBarIcon = try container.decodeIfPresent(MenuBarIcon.self, forKey: .menuBarIcon) ?? .fallback
         showWorkspaceName = try container.decodeIfPresent(Bool.self, forKey: .showWorkspaceName) ?? true
+        hideMenuBarIcon = try container.decodeIfPresent(Bool.self, forKey: .hideMenuBarIcon) ?? false
+        launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? true
         followFocusedApp = try container.decodeIfPresent(Bool.self, forKey: .followFocusedApp) ?? true
         keyboards = try container.decodeIfPresent([KeyboardProfile].self, forKey: .keyboards) ?? []
         keyModifications = try container.decodeIfPresent(Bool.self, forKey: .keyModifications) ?? true
@@ -665,6 +721,8 @@ struct Config: Codable, Equatable {
         try container.encode(snap, forKey: .snap)
         try container.encode(menuBarIcon, forKey: .menuBarIcon)
         try container.encode(showWorkspaceName, forKey: .showWorkspaceName)
+        try container.encode(hideMenuBarIcon, forKey: .hideMenuBarIcon)
+        try container.encode(launchAtLogin, forKey: .launchAtLogin)
         try container.encode(followFocusedApp, forKey: .followFocusedApp)
         try container.encode(keyboards, forKey: .keyboards)
         try container.encode(keyModifications, forKey: .keyModifications)
