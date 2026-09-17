@@ -4,7 +4,7 @@ Notable changes, newest first. Versions follow the number in
 `Resources/Info.plist`, which is what `make app` stamps into the bundle and what
 the Homebrew cask points at.
 
-## Unreleased
+## 1.1.0
 
 ### Added
 
