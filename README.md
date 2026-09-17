@@ -54,6 +54,12 @@ Signed and notarised, so it opens without a Gatekeeper detour, and
 stable across releases, macOS keeps the Accessibility grant through an upgrade
 rather than making you approve it again.
 
+Homebrew does the installing, but the menu bar's **Check for Updates…** will
+tell you when there's something to install — it asks GitHub for the latest
+release, compares it with the version you're running, and hands you the `brew`
+line. It never downloads or replaces anything itself, and it only ever runs when
+you ask it to.
+
 The app is menu-bar only — no Dock icon, no window at launch. The first launch
 opens Settings: add a workspace, add apps to it, press its shortcut. It starts
 with your machine unless you turn that off in Settings ▸ General.
@@ -314,6 +320,7 @@ Sources/TileBandit/
 ├── StatusMenu.swift         what the menu bar menu looks like
 ├── BanditIcons.swift        the drawn glyph set + the app icon artwork
 ├── LoginItem.swift          launch at login, via SMAppService
+├── UpdateChecker.swift      asks GitHub for the latest release; brew installs it
 ├── Models.swift             Config / DisplayProfile / Workspace / Shortcut (Codable)
 ├── ConfigStore.swift        ObservableObject + debounced JSON autosave
 ├── DisplayProfiles.swift    display fingerprinting + profile detection
@@ -333,7 +340,8 @@ Sources/TileBandit/
 
 ## Roadmap
 
-- A signed, notarised release with automatic updates.
+- Updates that install themselves. The app tells you one is out; applying it is
+  still `brew upgrade`.
 - Option to *keep* unassigned apps visible during switches.
 - Persist the last workspace per profile across relaunches (it survives
   replugging a monitor today, but not quitting).

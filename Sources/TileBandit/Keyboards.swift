@@ -104,13 +104,46 @@ enum KeyboardIdentity {
         )
     }
 
-    /// Walks every IOHIDDevice that publishes the keyboard usage.
+    /// Of `keys`, the ones whose device is plugged in but publishes no keyboard
+    /// interface — present, and yet out of reach of any mapping.
     ///
-    /// Devices with no `Transport` are skipped: those are driver-provided
-    /// virtual keyboards (Karabiner's, and anything else that re-emits events),
-    /// and remapping one is meaningless — the physical board behind it is the
-    /// thing a mapping should be attached to.
+    /// `snapshot()` only sees devices that publish the keyboard usage, so a
+    /// keyboard whose keyboard interface another driver has taken over
+    /// (Karabiner's is the usual one) drops out of it while the same device's
+    /// mouse and consumer interfaces stay behind. From the config's side that
+    /// is indistinguishable from unplugged, which is the worse of the two
+    /// stories to tell: hidutil is handed a matcher that still selects the
+    /// device's *other* interfaces, writes the mapping there, and exits 0. The
+    /// mapping is real, it just has no keyboard usages to rewrite. Diffing the
+    /// two walks is what tells "unplugged" and "taken over" apart.
+    ///
+    /// `attached` is the keyboard walk's own answer — every caller has just
+    /// taken a `snapshot()`, so it's handed in rather than walked for twice.
+    static func unreachable(from keys: [String], attached: Set<String>) -> [String] {
+        let present = presentDeviceKeys()
+        return keys.filter { !attached.contains($0) && present.contains($0) }
+    }
+
+    /// Keys for every HID device present, whatever usage it publishes — keyed
+    /// exactly as `snapshot()` keys a keyboard, so the two are comparable.
+    private static func presentDeviceKeys() -> Set<String> {
+        var keys = Set<String>()
+        forEachHIDService(keyboardsOnly: false) { keys.insert(reference(from: $0).key) }
+        return keys
+    }
+
+    /// Walks every IOHIDDevice that publishes the keyboard usage.
     private static func forEachKeyboardService(_ body: ([String: Any]) -> Void) {
+        forEachHIDService(keyboardsOnly: true, body)
+    }
+
+    /// Walks the HID registry, optionally narrowed to the keyboards.
+    ///
+    /// Devices with no `Transport` are skipped either way: those are
+    /// driver-provided virtual keyboards (Karabiner's, and anything else that
+    /// re-emits events), and remapping one is meaningless — the physical board
+    /// behind it is the thing a mapping should be attached to.
+    private static func forEachHIDService(keyboardsOnly: Bool, _ body: ([String: Any]) -> Void) {
         var iterator: io_iterator_t = 0
         guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching(kIOHIDDeviceKey), &iterator) == KERN_SUCCESS
         else { return }
@@ -121,7 +154,7 @@ enum KeyboardIdentity {
             var unmanaged: Unmanaged<CFMutableDictionary>?
             guard IORegistryEntryCreateCFProperties(service, &unmanaged, kCFAllocatorDefault, 0) == KERN_SUCCESS,
                   let properties = unmanaged?.takeRetainedValue() as? [String: Any],
-                  isKeyboard(properties),
+                  !keyboardsOnly || isKeyboard(properties),
                   properties[kIOHIDTransportKey] != nil
             else { continue }
             body(properties)
@@ -163,6 +196,11 @@ final class KeyboardManager {
     private var pendingRescan: DispatchWorkItem?
 
     private(set) var attached: [KeyboardRef] = []
+
+    /// Names of filed keyboards that are plugged in but publish no keyboard
+    /// interface. Kept rather than recomputed so the log line only goes out
+    /// when the answer changes — a rescan fires on every plug, and on wake.
+    private(set) var unreachable: [String] = []
 
     /// Fired after every settled rescan, including the first at launch — even
     /// when the set is unchanged, since that's also the signal to reapply.
@@ -225,8 +263,29 @@ final class KeyboardManager {
         if !refs.isEmpty {
             adopt(refs)
             attached = refs
+            noteUnreachable()
         }
         onKeyboardsChange?(attached)
+    }
+
+    /// Records which filed keyboards are present but have no keyboard interface
+    /// for a mapping to land on, and says so once when that changes. Worth a log
+    /// line of its own: hidutil will have reported success, so this is the only
+    /// place the machine ever admits the remap isn't reaching any keys.
+    private func noteUnreachable() {
+        let stranded = Set(KeyboardIdentity.unreachable(
+            from: store.config.keyboards.compactMap { $0.keyboard?.key },
+            attached: Set(attached.map(\.key))
+        ))
+        let names = store.config.keyboards
+            .filter { $0.keyboard.map { stranded.contains($0.key) } ?? false }
+            .map(\.name)
+        guard names != unreachable else { return }
+        unreachable = names
+        if !names.isEmpty {
+            NSLog("TileBandit: \(names.joined(separator: ", ")) is plugged in but publishes no keyboard "
+                + "interface — another driver has it; key modifications can't reach it")
+        }
     }
 
     /// Files a profile for every keyboard we haven't seen, and keeps the stored

@@ -48,6 +48,7 @@ struct KeyModificationsTab: View {
 
     @State private var keyboardID: UUID?
     @State private var attached: [KeyboardRef] = KeyboardIdentity.snapshot()
+    @State private var unreachable: [String] = []
     @State private var accessibilityGranted = AccessibilityPermission.isGranted
 
     var body: some View {
@@ -98,7 +99,7 @@ struct KeyModificationsTab: View {
         .onDisappear { debugger.debuggerTabVisible = false }
         .onAppear {
             debugger.debuggerTabVisible = true
-            attached = KeyboardIdentity.snapshot()
+            refreshDevices()
             accessibilityGranted = AccessibilityPermission.isGranted
             if keyboardID == nil || !store.config.keyboards.contains(where: { $0.id == keyboardID }) {
                 keyboardID = preferredKeyboardID
@@ -108,8 +109,21 @@ struct KeyModificationsTab: View {
         // only have changed while we were in the background.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             accessibilityGranted = AccessibilityPermission.isGranted
-            attached = KeyboardIdentity.snapshot()
+            refreshDevices()
         }
+    }
+
+    /// Both halves of the hardware picture, always read together: which
+    /// keyboards are reachable, and which are present but aren't.
+    private func refreshDevices() {
+        attached = KeyboardIdentity.snapshot()
+        let stranded = Set(KeyboardIdentity.unreachable(
+            from: store.config.keyboards.compactMap { $0.keyboard?.key },
+            attached: Set(attached.map(\.key))
+        ))
+        unreachable = store.config.keyboards
+            .filter { $0.keyboard.map { stranded.contains($0.key) } ?? false }
+            .map(\.name)
     }
 
     private var header: some View {
@@ -132,6 +146,25 @@ struct KeyModificationsTab: View {
                     Text("Hold and chord rules need Accessibility. Plain swaps are working already.")
                         .font(.callout)
                     Button("Grant…") { AccessibilityPermission.requestAndOpenSettings() }
+                    Spacer()
+                }
+            }
+
+            // The one failure this feature can't otherwise own up to: hidutil
+            // reports success, the picker shows the keyboard as simply not
+            // connected, and every key goes on behaving as though nothing was
+            // ever mapped.
+            if !unreachable.isEmpty {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(
+                        "\(unreachable.joined(separator: ", ")) is plugged in, but macOS is publishing "
+                            + "no keyboard interface for it — another driver (Karabiner and the like) has "
+                            + "taken it over. Key modifications can't reach it until that driver lets go."
+                    )
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                 }
             }
@@ -167,7 +200,7 @@ struct KeyModificationsTab: View {
 
     private func redetect() {
         keyboards.rescan()
-        attached = KeyboardIdentity.snapshot()
+        refreshDevices()
         if keyboardID == nil { keyboardID = preferredKeyboardID }
     }
 

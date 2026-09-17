@@ -93,6 +93,7 @@ private func menuSymbol(_ names: String...) -> NSImage {
     func menuToggleKeyModifications()
     func menuOpenSettings()
     func menuReloadConfig()
+    func menuCheckForUpdates()
     func menuAbout()
 }
 
@@ -304,6 +305,16 @@ struct StatusMenu {
             #selector(StatusMenuActions.menuReloadConfig),
             symbol: "arrow.clockwise",
             shortcut: store.config.reloadConfigShortcut,
+            to: menu
+        )
+        // Asks, and only asks: installing is Homebrew's job. Without this the
+        // app has no way to know a release exists, and neither does anyone who
+        // isn't in the habit of running `brew outdated`.
+        add(
+            "Check for Updates…",
+            #selector(StatusMenuActions.menuCheckForUpdates),
+            symbol: "arrow.down.circle",
+            shortcut: nil,
             to: menu
         )
     }

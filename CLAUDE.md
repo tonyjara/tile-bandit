@@ -60,7 +60,8 @@ sourcekit-lsp, which understands SPM natively).
   saloon sign — opening the About panel) and the live display setup with its
   profile submenu; Workspaces (each with a ✓ when active and a solid-vs-dashed
   grid glyph saying whether Apply Grid Layout has anything to do there) plus
-  next/previous; Windows; then Setup. Key equivalents come from the config
+  next/previous; Windows; then Setup (which ends with Check for Updates… —
+  see UpdateChecker.swift). Key equivalents come from the config
   rather than being hard-coded, so a reassignment shows up in the menu. Section
   headers are `NSMenuItem.sectionHeader` on macOS 14+ and a styled disabled
   item below that. The Key Modifications master switch is in the menu on
@@ -97,6 +98,22 @@ sourcekit-lsp, which understands SPM natively).
   re-registering every launch would be arguing with them) and the Settings
   toggle says so instead. Verified against an ad-hoc signed bundle — no
   Developer ID needed for this part.
+- `UpdateChecker.swift` — one HTTPS GET at `api.github.com/.../releases/latest`,
+  behind the menu's Check for Updates…. It deliberately *only asks*: the cask
+  owns installation, so there is nothing to download, verify or swap, and the
+  alert hands over `brew upgrade --cask tile-bandit` instead. Sparkle would be a
+  dependency plus a signing key, and two updaters disagreeing about what's
+  installed is worse than having none. Permission-free, on demand only — no
+  timer, nothing sent but the request. `isBundledApp` is LoginItem's
+  `isSupported` question again and for a neighbouring reason: only a bundle has
+  a stamped version to compare, and only a bundle was installed by Homebrew, so
+  a `swift run` build is told to pull and rebuild rather than given a `brew`
+  line about a checkout it can't see. A non-200 is reported, never folded into
+  "up to date" — GitHub answers 403 to an unauthenticated caller it's rate
+  limiting (and to one that sends no `User-Agent`, which is why the request sets
+  one), and "no news" read as "you're current" would strand someone on an old
+  build for good. Version comparison is component-wise numeric, so 1.10.0 beats
+  1.9.0 and a `-beta` suffix never reads as newer than the release it precedes.
 - `Models.swift` — `Config`/`DisplayProfile`/`DisplayRef`/`Workspace`/`AppRef`/
   `Shortcut` plus the grid types (`DisplayGrid`/`GridRegion`/`GridCell`/
   `GridSize`/`SnapSettings`) and `MenuBarIcon` (two families: `bandit.*` raw
@@ -304,12 +321,29 @@ sourcekit-lsp, which understands SPM natively).
   serial-less keyboards looking like one — hidutil couldn't tell them apart
   either. Devices with no `Transport` are skipped, which is what filters out
   driver-provided virtual keyboards (Karabiner's and the like).
+  `isKeyboard()` checks `DeviceUsagePairs` as well as the primary usage, and
+  that second half is not belt-and-braces: a composite board publishes one
+  interface carrying several top-level collections, so a Dygma Raise arrives
+  with a *primary* usage of 12:1 (consumer) and its keyboard only named in the
+  pairs. Reading the registry by `PrimaryUsage` alone — `ioreg | grep
+  '"PrimaryUsage" = 6'`, say — concludes such a keyboard isn't one at all.
   `matchingJSON(for:)` builds hidutil's `--matching` dictionary: vendor plus
   product, deliberately *without* a usage filter, because a keyboard whose
   keyboard interface is currently seized by another driver publishes no
   keyboard-usage service and a filtered matcher would silently select nothing;
   landing on the device's other interfaces is harmless, since a UserKeyMapping
-  only rewrites keyboard-page usages. The built-in keyboard publishes no vendor
+  only rewrites keyboard-page usages — harmless, but *silent*, which is what
+  `unreachable(from:)` exists to fix. Being seized and being unplugged look
+  identical from the config's side, and they are not: the seized one is handed a
+  matcher that still selects its mouse and consumer interfaces, so hidutil
+  writes the mapping there and exits 0 while no key is ever rewritten. Diffing
+  the keyboard walk (`snapshot()`) against every HID device present
+  (`presentDeviceKeys()`, the same walk with the usage filter dropped, keyed
+  identically so the two are comparable) is what tells them apart; both go
+  through `forEachHIDService(keyboardsOnly:)`. `KeyboardManager` keeps the
+  answer in `unreachable` and logs it once per change — a rescan fires on every
+  plug and on wake — and KeyModificationsTab puts it on screen.
+  The built-in keyboard publishes no vendor
   or product id at all, so it falls back to its registry product string — and
   that one *does* need the usage filter, because the trackpad beside it answers
   to the same name. (`BuiltIn` looks like the obvious matcher and isn't:
@@ -411,7 +445,12 @@ sourcekit-lsp, which understands SPM natively).
 - `KeyModificationsTab.swift` — the settings UI for the key-modification
   engine, in its own file because that feature already owns four others.
   Scoped to one keyboard at a time by a picker that opens on whichever is
-  actually plugged in. The by-id bindings stamp `modifiedAt` on every write,
+  actually plugged in. `refreshDevices()` reads both halves of the hardware
+  picture together — what's attached, and what's present but has no keyboard
+  interface (`KeyboardIdentity.unreachable(from:)`) — because the second is the
+  only warning this feature gets about a mapping that reaches nothing; without
+  it the keyboard just reads as not connected. The by-id bindings stamp
+  `modifiedAt` on every write,
   since "a new keyboard starts from the last edited keymaps" is exactly what
   that field means. The master toggle sits *outside* the region it disables —
   SwiftUI's `.disabled` is additive, so an inner `.disabled(false)` can't undo

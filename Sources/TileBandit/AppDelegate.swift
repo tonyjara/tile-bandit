@@ -316,6 +316,62 @@ extension AppDelegate: StatusMenuActions {
         reloadConfig()
     }
 
+    /// Asks GitHub what the latest release is and says so. Nothing is
+    /// downloaded or replaced — the cask owns installation, and this is the
+    /// piece that was missing: a way to find out an upgrade is waiting without
+    /// going and asking `brew` yourself.
+    @objc func menuCheckForUpdates() {
+        activate()
+        Task { @MainActor in
+            present(await UpdateChecker.check())
+        }
+    }
+
+    @MainActor
+    private func present(_ outcome: UpdateChecker.Outcome) {
+        let alert = NSAlert()
+        alert.icon = AppIconArt.image(size: 128)
+
+        switch outcome {
+        case let .upToDate(current):
+            alert.messageText = "Tile Bandit \(current) is the latest release."
+            alert.informativeText = "Nothing to do."
+            alert.addButton(withTitle: "OK")
+
+        case let .available(latest, current):
+            alert.messageText = "Tile Bandit \(latest) is available."
+            // A source build was never installed by Homebrew, so naming the
+            // cask command there would be advice about a checkout we can't see.
+            alert.informativeText = UpdateChecker.isBundledApp
+                ? "You're on \(current). Install it with:\n\n\(UpdateChecker.upgradeCommand)"
+                : "This build reports \(current) and was run from source, so it updates with a "
+                    + "pull and a rebuild rather than through Homebrew."
+            alert.addButton(withTitle: "Release Notes")
+            if UpdateChecker.isBundledApp { alert.addButton(withTitle: "Copy Command") }
+            alert.addButton(withTitle: "Later")
+
+        case let .failed(reason):
+            alert.alertStyle = .warning
+            alert.messageText = "Couldn't check for updates."
+            // Named rather than swallowed: "no news" and "never asked" look the
+            // same from here, and only one of them means you're up to date.
+            alert.informativeText = reason
+            alert.addButton(withTitle: "OK")
+        }
+
+        let response = alert.runModal()
+        guard case .available = outcome else { return }
+        switch response {
+        case .alertFirstButtonReturn:
+            NSWorkspace.shared.open(UpdateChecker.releasesPage)
+        case .alertSecondButtonReturn where UpdateChecker.isBundledApp:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(UpdateChecker.upgradeCommand, forType: .string)
+        default:
+            break
+        }
+    }
+
     /// The standard About panel, filled in by hand: a `swift run` build has no
     /// bundle to read a name, version or icon out of, and the dev loop is
     /// exactly where "which build am I looking at?" gets asked.
