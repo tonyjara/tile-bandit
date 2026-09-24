@@ -438,7 +438,15 @@ sourcekit-lsp, which understands SPM natively).
   stashed in view state, no async NSItemProvider decoding), drag a tile to
   move, drag its corner handle to span cells, ✕ removes. Chips cover every app
   not on *this* grid, dimmed and labelled with the other display when the app
-  sits on one, so moving an app between monitors is a single drag. Grids are
+  sits on one, so moving an app between monitors is a single drag. A second
+  row badges the apps already *on* the grid: tiles may overlap (two apps can
+  share cells, and a hand-edit can stack them exactly), and in a ZStack the
+  last one drawn takes every click — so clicking a badge raises that app's
+  tile with `zIndex`, which is the only way to reach one another tile covers,
+  and the only way to get at its ✕ and resize dot. The pick is held as a
+  bundle id and re-validated against the grid on read (`selection`), because
+  the app can leave it — removed, dragged to another monitor, or the display
+  picker switched — while this view and its state live on. Grids are
   materialised on first write (the steppers' binding), which is why an
   untouched display stays out of the config. `ShortcutField` shows the current combo as text
   with Reassign (records via ShortcutRecorder) and clear buttons.

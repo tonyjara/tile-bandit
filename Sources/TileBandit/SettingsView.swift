@@ -417,6 +417,12 @@ struct WorkspaceDetail: View {
 /// place it, drag a placed tile to move it, drag its corner handle to span
 /// more cells, ✕ removes it. An app placed on another display's grid shows up
 /// as a dimmed chip — dragging it here moves it to this monitor.
+///
+/// Placed apps also get a badge row above the grid. Tiles are allowed to
+/// overlap (two apps can share a cell, and a hand-edited config can stack them
+/// exactly), and the one drawn last takes every click — so picking an app by
+/// badge raises its tile to the front, which is the only way to reach a tile
+/// that is completely covered.
 struct GridLayoutEditor: View {
     @Binding var workspace: Workspace
     let displays: [DisplayRef]
@@ -430,6 +436,9 @@ struct GridLayoutEditor: View {
     @State private var dropPreview: GridRegion?
     /// Live move/resize of a placed tile.
     @State private var interaction: TileInteraction?
+    /// Badge-picked app, raised above the other tiles. Read through
+    /// `selection`, never directly — the app may have left this grid since.
+    @State private var selectedApp: String?
 
     struct TileInteraction {
         let bundleId: String
@@ -448,6 +457,20 @@ struct GridLayoutEditor: View {
     /// on another monitor's, which a drag over here moves.
     private var availableApps: [AppRef] {
         workspace.apps.filter { grid.layout[$0.bundleId] == nil }
+    }
+
+    /// What's on this grid, in the workspace's own order so the badges line up
+    /// with the tile colours.
+    private var placedApps: [AppRef] {
+        workspace.apps.filter { grid.layout[$0.bundleId] != nil }
+    }
+
+    /// The raised app, forgotten the moment it stops being on this grid —
+    /// removed, dragged to another monitor, or the display picker switched
+    /// under us (this view survives that, its state with it).
+    private var selection: String? {
+        guard let selectedApp, grid.layout[selectedApp] != nil else { return nil }
+        return selectedApp
     }
 
     /// The other display an app is currently placed on, if any.
@@ -480,10 +503,25 @@ struct GridLayoutEditor: View {
                     }
                 }
 
+                if !placedApps.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("On the grid:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(placedApps) { app in
+                                    badge(for: app)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 canvas
                     .frame(height: 150)
 
-                Text("Drag a tile to move it, drag its corner dot to cover more cells, ✕ to remove.")
+                Text(tileHint)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -516,6 +554,58 @@ struct GridLayoutEditor: View {
         }
     }
 
+    /// A placed app: click to raise its tile above the others, click again to
+    /// let it drop back. Tinted with the tile's own colour so the badge and
+    /// the thing it points at are recognisably the same app.
+    private func badge(for app: AppRef) -> some View {
+        let isSelected = selection == app.bundleId
+        let tint = color(for: app.bundleId)
+        let region = grid.layout[app.bundleId]
+        return Button {
+            selectedApp = isSelected ? nil : app.bundleId
+        } label: {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(tint)
+                    .frame(width: 7, height: 7)
+                Text(app.name)
+                    .font(.caption)
+                    .fontWeight(isSelected ? .semibold : .regular)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(tint.opacity(isSelected ? 0.3 : 0.12)))
+            .overlay(Capsule().strokeBorder(tint.opacity(isSelected ? 1 : 0.4), lineWidth: isSelected ? 1.5 : 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(badgeHelp(app: app, region: region, isSelected: isSelected))
+    }
+
+    private func badgeHelp(app: AppRef, region: GridRegion?, isSelected: Bool) -> String {
+        let cells = region.map { regionDescription($0) } ?? app.bundleId
+        return isSelected
+            ? "\(cells) — click to drop it back"
+            : "\(cells) — click to bring this tile to the front"
+    }
+
+    /// Cells counted from 1, the way the grid reads on screen.
+    private func regionDescription(_ region: GridRegion) -> String {
+        let columns = region.colSpan == 1
+            ? "Column \(region.col + 1)"
+            : "Columns \(region.col + 1)–\(region.col + region.colSpan)"
+        let rows = region.rowSpan == 1
+            ? "row \(region.row + 1)"
+            : "rows \(region.row + 1)–\(region.row + region.rowSpan)"
+        return "\(columns), \(rows)"
+    }
+
+    private var tileHint: String {
+        let base = "Drag a tile to move it, drag its corner dot to cover more cells, ✕ to remove."
+        guard placedApps.count > 1 else { return base }
+        return base + " Where tiles overlap, click an app above to bring its tile to the front."
+    }
+
     private var canvas: some View {
         GeometryReader { geo in
             let cols = grid.columns
@@ -538,15 +628,20 @@ struct GridLayoutEditor: View {
                     if let stored = grid.layout[app.bundleId] {
                         let region = (interaction?.bundleId == app.bundleId ? interaction!.preview : stored)
                             .clamped(columns: cols, rows: rows)
+                        let raised = selection == app.bundleId || interaction?.bundleId == app.bundleId
                         tile(
                             app: app,
                             region: region,
+                            isSelected: selection == app.bundleId,
                             cols: cols,
                             rows: rows,
                             cellWidth: cellWidth,
                             cellHeight: cellHeight,
                             canvasSize: geo.size
                         )
+                        // Drawing order is hit-test order, so this is what puts
+                        // the picked tile — and its ✕ and resize dot — in reach.
+                        .zIndex(raised ? 1 : 0)
                     }
                 }
 
@@ -583,7 +678,8 @@ struct GridLayoutEditor: View {
                 preview: $dropPreview,
                 place: { bundleId, region in
                     workspace.place(bundleId, at: region, on: displayKey)
-                }
+                },
+                select: { selectedApp = $0 }
             ))
         }
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
@@ -592,6 +688,7 @@ struct GridLayoutEditor: View {
     private func tile(
         app: AppRef,
         region: GridRegion,
+        isSelected: Bool,
         cols: Int,
         rows: Int,
         cellWidth: CGFloat,
@@ -600,10 +697,11 @@ struct GridLayoutEditor: View {
     ) -> some View {
         let tileColor = color(for: app.bundleId)
         let isActive = interaction?.bundleId == app.bundleId
+        let isFront = isActive || isSelected
 
         return RoundedRectangle(cornerRadius: 4)
-            .fill(tileColor.opacity(isActive ? 0.45 : 0.3))
-            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(tileColor, lineWidth: isActive ? 2 : 1))
+            .fill(tileColor.opacity(isFront ? 0.45 : 0.3))
+            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(tileColor, lineWidth: isFront ? 2 : 1))
             .overlay(
                 Text(app.name)
                     .font(.caption2)
@@ -639,6 +737,9 @@ struct GridLayoutEditor: View {
                 y: CGFloat(region.row) * cellHeight + 2
             )
             .gesture(moveGesture(app: app, cols: cols, rows: rows, canvasSize: canvasSize))
+            // Simultaneous so it doesn't race the drag: a click that never
+            // moves picks the tile, a click that moves still drags it.
+            .simultaneousGesture(TapGesture().onEnded { selectedApp = app.bundleId })
     }
 
     /// Grab anywhere in the tile: it follows in whole-cell steps, span preserved.
@@ -646,6 +747,7 @@ struct GridLayoutEditor: View {
         DragGesture(minimumDistance: 2, coordinateSpace: .named("gridCanvas"))
             .onChanged { value in
                 guard let stored = grid.layout[app.bundleId] else { return }
+                if selectedApp != app.bundleId { selectedApp = app.bundleId }
                 let region = stored.clamped(columns: cols, rows: rows)
                 let startCell = cell(at: value.startLocation, cols: cols, rows: rows, size: canvasSize)
                 let currentCell = cell(at: value.location, cols: cols, rows: rows, size: canvasSize)
@@ -710,6 +812,9 @@ private struct GridDropDelegate: DropDelegate {
     @Binding var draggedChip: String?
     @Binding var preview: GridRegion?
     let place: (String, GridRegion) -> Void
+    /// Raises what was just dropped: it may have landed under a tile that was
+    /// already there, and it's the one the user is still thinking about.
+    let select: (String) -> Void
 
     func validateDrop(info: DropInfo) -> Bool { draggedChip != nil }
 
@@ -729,6 +834,7 @@ private struct GridDropDelegate: DropDelegate {
         }
         guard let bundleId = draggedChip, let region = preview else { return false }
         place(bundleId, region)
+        select(bundleId)
         return true
     }
 
