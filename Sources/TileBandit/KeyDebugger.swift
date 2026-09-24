@@ -11,9 +11,12 @@ import Combine
 /// monitor can see them, so the hotkey handlers report their firings here
 /// via `recordHotkeyFired` — those show up even when the window isn't focused.
 ///
-/// Once started it stays on until explicitly stopped. Key presses are only
-/// swallowed while its own tab is visible (to avoid beeps); on other tabs
-/// events pass through so typing keeps working.
+/// Listening lasts only while someone is looking at it: leaving the tab, or
+/// the settings window losing key (closing it, switching apps), stops it.
+/// A monitor left armed on a window kept alive behind the scenes (the settings
+/// window isn't released on close) was a Start Listening that never ended.
+/// Key presses are only swallowed while its own tab is visible (to avoid
+/// beeps).
 final class KeyDebugger: ObservableObject {
     struct KeyPress {
         let combo: String
@@ -26,8 +29,11 @@ final class KeyDebugger: ObservableObject {
     @Published private(set) var heldModifiers = ""
     @Published private(set) var lastPress: KeyPress?
 
-    /// Set by the owning tab's onAppear/onDisappear.
-    var debuggerTabVisible = false
+    /// Set by the owning tab's onAppear/onDisappear. Leaving the tab stops
+    /// listening.
+    var debuggerTabVisible = false {
+        didSet { if !debuggerTabVisible { stop() } }
+    }
 
     /// While ShortcutRecorder is capturing a combo, this debugger passes
     /// events through untouched so the recorder's monitor sees them and

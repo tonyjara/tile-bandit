@@ -100,8 +100,12 @@ sourcekit-lsp, which understands SPM natively).
   Developer ID needed for this part.
 - `UpdateChecker.swift` — one HTTPS GET at `api.github.com/.../releases/latest`,
   behind the menu's Check for Updates…. It deliberately *only asks*: the cask
-  owns installation, so there is nothing to download, verify or swap, and the
-  alert hands over `brew upgrade --cask tile-bandit` instead. Sparkle would be a
+  owns installation, so there is nothing to download, verify or swap. Where
+  Homebrew really installed us, `UpdateInstaller.swift` offers Install and
+  Relaunch — it runs `brew update` + `brew upgrade --cask tile-bandit` itself
+  (Homebrew still does the installing), checks the bundle's Info.plist for the
+  new version, then a detached `sh` waits for our pid to exit and `open`s the
+  bundle again. Anywhere else the alert hands over the command instead. Sparkle would be a
   dependency plus a signing key, and two updaters disagreeing about what's
   installed is worse than having none. Permission-free, on demand only — no
   timer, nothing sent but the request. `isBundledApp` is LoginItem's
@@ -285,8 +289,11 @@ sourcekit-lsp, which understands SPM natively).
   (it started on Shortcuts, and moved once key modifications existed: "what key
   is this, really?" is the question you ask right before remapping one, and far
   less often about a hotkey). Uses a *local* NSEvent monitor (permission-free;
-  a global monitor would need Accessibility). Persistent: only the Stop button
-  stops it. Consumes keyDown events only while its own tab is visible
+  a global monitor would need Accessibility). Listens only while it's being
+  looked at: leaving the tab (`debuggerTabVisible` going false) or the settings
+  window resigning key (closed, minimised, another app in front — AppDelegate
+  observes it) stops it. The window is kept alive after closing, so a monitor
+  left to the Stop button could stay armed indefinitely. Consumes keyDown events only while its own tab is visible
   (`debuggerTabVisible`) — and never when the first responder is an NSTextView,
   since that tab has editable fields and typing has to keep working. Its
   verdict answers two questions at once, because a key can be remappable

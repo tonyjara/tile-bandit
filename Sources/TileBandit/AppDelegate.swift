@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var frontmostWhenMenuOpened: NSRunningApplication?
     private var settingsWindow: NSWindow?
     private var settingsCloseObserver: NSObjectProtocol?
+    private var settingsResignObserver: NSObjectProtocol?
     private var cancellables: Set<AnyCancellable> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -247,6 +248,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ) { [weak self] _ in
                 self?.shortcutRecorder.cancel()
             }
+            // Resigning key covers closing, minimising and switching to
+            // another app alike: the debugger listens only while it's in front.
+            settingsResignObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didResignKeyNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                self?.keyDebugger.stop()
+            }
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
         activate()
@@ -316,10 +326,10 @@ extension AppDelegate: StatusMenuActions {
         reloadConfig()
     }
 
-    /// Asks GitHub what the latest release is and says so. Nothing is
-    /// downloaded or replaced — the cask owns installation, and this is the
-    /// piece that was missing: a way to find out an upgrade is waiting without
-    /// going and asking `brew` yourself.
+    /// Asks GitHub what the latest release is and says so. On a cask install
+    /// it can also run the upgrade and relaunch (UpdateInstaller); otherwise
+    /// it hands over the command, since a `brew upgrade` of a copy Homebrew
+    /// didn't install would fail or install a second one.
     @objc func menuCheckForUpdates() {
         activate()
         Task { @MainActor in
@@ -329,26 +339,41 @@ extension AppDelegate: StatusMenuActions {
 
     @MainActor
     private func present(_ outcome: UpdateChecker.Outcome) {
+        enum Choice { case install, notes, copy, dismiss }
         let alert = NSAlert()
         alert.icon = AppIconArt.image(size: 128)
+        var choices: [Choice] = []
 
         switch outcome {
         case let .upToDate(current):
             alert.messageText = "Tile Bandit \(current) is the latest release."
             alert.informativeText = "Nothing to do."
             alert.addButton(withTitle: "OK")
+            choices = [.dismiss]
 
         case let .available(latest, current):
             alert.messageText = "Tile Bandit \(latest) is available."
             // A source build was never installed by Homebrew, so naming the
             // cask command there would be advice about a checkout we can't see.
-            alert.informativeText = UpdateChecker.isBundledApp
-                ? "You're on \(current). Install it with:\n\n\(UpdateChecker.upgradeCommand)"
-                : "This build reports \(current) and was run from source, so it updates with a "
+            if UpdateInstaller.isAvailable {
+                alert.informativeText = "You're on \(current). Homebrew will install it, "
+                    + "and Tile Bandit will relaunch when it's done."
+                alert.addButton(withTitle: "Install and Relaunch")
+                choices = [.install]
+            } else if UpdateChecker.isBundledApp {
+                alert.informativeText = "You're on \(current). Install it with:\n\n\(UpdateChecker.upgradeCommand)"
+            } else {
+                alert.informativeText = "This build reports \(current) and was run from source, so it updates with a "
                     + "pull and a rebuild rather than through Homebrew."
+            }
             alert.addButton(withTitle: "Release Notes")
-            if UpdateChecker.isBundledApp { alert.addButton(withTitle: "Copy Command") }
+            choices.append(.notes)
+            if UpdateChecker.isBundledApp, !UpdateInstaller.isAvailable {
+                alert.addButton(withTitle: "Copy Command")
+                choices.append(.copy)
+            }
             alert.addButton(withTitle: "Later")
+            choices.append(.dismiss)
 
         case let .failed(reason):
             alert.alertStyle = .warning
@@ -357,18 +382,64 @@ extension AppDelegate: StatusMenuActions {
             // same from here, and only one of them means you're up to date.
             alert.informativeText = reason
             alert.addButton(withTitle: "OK")
+            choices = [.dismiss]
         }
 
-        let response = alert.runModal()
-        guard case .available = outcome else { return }
-        switch response {
-        case .alertFirstButtonReturn:
+        let index = alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        switch choices.indices.contains(index) ? choices[index] : .dismiss {
+        case .install:
+            if case let .available(latest, _) = outcome { installUpdate(latest) }
+        case .notes:
             NSWorkspace.shared.open(UpdateChecker.releasesPage)
-        case .alertSecondButtonReturn where UpdateChecker.isBundledApp:
+        case .copy:
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(UpdateChecker.upgradeCommand, forType: .string)
-        default:
+        case .dismiss:
             break
+        }
+    }
+
+    @MainActor
+    private func installUpdate(_ latest: String) {
+        let running = UpdateInstaller.RunningProcess()
+        let panel = UpdateProgressPanel(version: latest) { running.cancel() }
+        panel.show()
+        Task { @MainActor in
+            do {
+                try await UpdateInstaller.install(expecting: latest, running: running)
+                panel.close()
+                UpdateInstaller.relaunch()
+            } catch UpdateInstaller.Failure.cancelled {
+                panel.close()
+            } catch {
+                panel.close()
+                showUpdateFailure(error)
+            }
+        }
+    }
+
+    @MainActor
+    private func showUpdateFailure(_ error: Error) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "The update didn't install."
+        switch error {
+        case let UpdateInstaller.Failure.brew(step, status, output):
+            // The tail is where brew puts the reason; the rest is progress chatter.
+            let tail = output.split(separator: "\n").suffix(8).joined(separator: "\n")
+            alert.informativeText = "\(step) exited \(status).\n\n\(tail)"
+        case let UpdateInstaller.Failure.unchanged(installed):
+            alert.informativeText = "Homebrew finished, but the installed copy is still \(installed). "
+                + "The tap may not have the release yet — try again in a few minutes."
+        default:
+            alert.informativeText = error.localizedDescription
+        }
+        alert.informativeText += "\n\nYou can also run it yourself:\n\(UpdateChecker.upgradeCommand)"
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Copy Command")
+        if alert.runModal() == .alertSecondButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(UpdateChecker.upgradeCommand, forType: .string)
         }
     }
 
