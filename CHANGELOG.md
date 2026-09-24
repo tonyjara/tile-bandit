@@ -4,6 +4,28 @@ Notable changes, newest first. Versions follow the number in
 `Resources/Info.plist`, which is what `make app` stamps into the bundle and what
 the Homebrew cask points at.
 
+## 1.2.0
+
+### Added
+
+- **Badges for the apps on a grid** in the grid layout editor. Tiles can
+  overlap (two apps can share cells, and a hand-edited config can stack them
+  exactly), and until now the tile drawn last took every click, so a covered
+  tile's ✕ and resize handle were out of reach. Clicking an app's badge brings
+  its tile to the front so you can resize or remove it.
+
+### Fixed
+
+- **Stuck keys from dual-role keys and chords.** The event tap used to run on
+  the main run loop, behind the settings window, the menu and every display
+  and keyboard rescan. When it blocked, macOS switched it off between a key's
+  press and its release. That left a hold's modifiers on every later keystroke,
+  or left a chord's replacement key down and auto-repeating. The tap now runs
+  on its own thread. Every teardown (tap disabled, re-plan, shutdown) now sends
+  the releases it owes. Presses the window server no longer sees as down are
+  also released after a short grace period, which covers a release that got
+  lost, for example from a Bluetooth keyboard dropping a report.
+
 ## 1.1.0
 
 ### Added
