@@ -4,6 +4,24 @@ Notable changes, newest first. Versions follow the number in
 `Resources/Info.plist`, which is what `make app` stamps into the bundle and what
 the Homebrew cask points at.
 
+## 1.3.0
+
+### Added
+
+- **Install and Relaunch** from Check for Updates…. When Homebrew installed Tile
+  Bandit, the update alert can now run the upgrade itself (`brew update`, then
+  `brew upgrade --cask tile-bandit`) and reopen the app afterwards, with a
+  progress window you can cancel. If the upgrade fails, the alert shows brew's
+  output and the command to run yourself. Copies Homebrew didn't install still
+  get the command to copy.
+
+### Fixed
+
+- **The key debugger no longer stays on.** Start Listening used to stay armed
+  until Stop was pressed, even after leaving the tab or closing the settings
+  window. It now stops on its own when you leave the Key Modifications tab,
+  close or minimise the settings window, or switch to another app.
+
 ## 1.2.0
 
 ### Added
