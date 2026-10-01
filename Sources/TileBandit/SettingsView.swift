@@ -1013,6 +1013,7 @@ struct ShortcutsTab: View {
                     shortcutRow("Previous workspace", $store.config.previousWorkspaceShortcut, id: "previous-workspace")
                     shortcutRow("Open settings", $store.config.openSettingsShortcut, id: "open-settings")
                     shortcutRow("Reload config from disk", $store.config.reloadConfigShortcut, id: "reload-config")
+                    shortcutRow("Caffeinate (keep the Mac awake)", $store.config.caffeinateShortcut, id: "caffeinate")
                 }
                 Section("Grid snapping") {
                     Toggle("Snap a window to the grid when dragging it with modifiers held", isOn: $store.config.snap.enabled)

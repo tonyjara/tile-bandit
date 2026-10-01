@@ -571,6 +571,9 @@ struct Config: Codable, Equatable {
     var previousWorkspaceShortcut: Shortcut?
     var openSettingsShortcut: Shortcut?
     var reloadConfigShortcut: Shortcut?
+    /// Toggles Caffeinate. Unassigned by default — staying awake is an
+    /// occasional thing, not worth taking a key from everyone for.
+    var caffeinateShortcut: Shortcut?
     var snap: SnapSettings
     /// Menu bar appearance. The name of the active workspace sits next to the
     /// icon unless you'd rather keep the menu bar narrow.
@@ -607,7 +610,7 @@ struct Config: Codable, Equatable {
         case version, profiles, floatingApps, hideUnassignedShortcut, applyLayoutShortcut
         case maximizeHoldShortcut, maximizeShortcut
         case nextWorkspaceShortcut, previousWorkspaceShortcut
-        case openSettingsShortcut, reloadConfigShortcut, snap
+        case openSettingsShortcut, reloadConfigShortcut, caffeinateShortcut, snap
         case menuBarIcon, showWorkspaceName, hideMenuBarIcon, launchAtLogin, followFocusedApp
         case keyboards, keyModifications, chords
         /// v1 only, read for migration and never written back.
@@ -626,6 +629,7 @@ struct Config: Codable, Equatable {
         previousWorkspaceShortcut: Shortcut? = Shortcut(key: "n"),
         openSettingsShortcut: Shortcut? = Shortcut(key: ","),
         reloadConfigShortcut: Shortcut? = Shortcut(key: "r"),
+        caffeinateShortcut: Shortcut? = nil,
         snap: SnapSettings = SnapSettings(),
         menuBarIcon: MenuBarIcon = .fallback,
         showWorkspaceName: Bool = true,
@@ -647,6 +651,7 @@ struct Config: Codable, Equatable {
         self.previousWorkspaceShortcut = previousWorkspaceShortcut
         self.openSettingsShortcut = openSettingsShortcut
         self.reloadConfigShortcut = reloadConfigShortcut
+        self.caffeinateShortcut = caffeinateShortcut
         self.snap = snap
         self.menuBarIcon = menuBarIcon
         self.showWorkspaceName = showWorkspaceName
@@ -684,6 +689,7 @@ struct Config: Codable, Equatable {
         previousWorkspaceShortcut = try Self.shortcut(in: container, key: .previousWorkspaceShortcut, default: Shortcut(key: "n"))
         openSettingsShortcut = try Self.shortcut(in: container, key: .openSettingsShortcut, default: Shortcut(key: ","))
         reloadConfigShortcut = try Self.shortcut(in: container, key: .reloadConfigShortcut, default: Shortcut(key: "r"))
+        caffeinateShortcut = try Self.shortcut(in: container, key: .caffeinateShortcut, default: nil)
         snap = try container.decodeIfPresent(SnapSettings.self, forKey: .snap) ?? SnapSettings()
         menuBarIcon = try container.decodeIfPresent(MenuBarIcon.self, forKey: .menuBarIcon) ?? .fallback
         showWorkspaceName = try container.decodeIfPresent(Bool.self, forKey: .showWorkspaceName) ?? true
@@ -698,7 +704,7 @@ struct Config: Codable, Equatable {
     private static func shortcut(
         in container: KeyedDecodingContainer<CodingKeys>,
         key: CodingKeys,
-        default fallback: Shortcut
+        default fallback: Shortcut?
     ) throws -> Shortcut? {
         guard container.contains(key) else { return fallback }
         return try container.decodeIfPresent(Shortcut.self, forKey: key)
@@ -718,6 +724,7 @@ struct Config: Codable, Equatable {
         try container.encode(previousWorkspaceShortcut, forKey: .previousWorkspaceShortcut)
         try container.encode(openSettingsShortcut, forKey: .openSettingsShortcut)
         try container.encode(reloadConfigShortcut, forKey: .reloadConfigShortcut)
+        try container.encode(caffeinateShortcut, forKey: .caffeinateShortcut)
         try container.encode(snap, forKey: .snap)
         try container.encode(menuBarIcon, forKey: .menuBarIcon)
         try container.encode(showWorkspaceName, forKey: .showWorkspaceName)

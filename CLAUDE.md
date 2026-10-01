@@ -98,6 +98,17 @@ sourcekit-lsp, which understands SPM natively).
   re-registering every launch would be arguing with them) and the Settings
   toggle says so instead. Verified against an ad-hoc signed bundle — no
   Developer ID needed for this part.
+- `Caffeine.swift` — Caffeinate: `caffeinate -di` held by this process, via two
+  IOKit power assertions (`PreventUserIdleDisplaySleep`, which also keeps the
+  screen saver off, and `PreventUserIdleSystemSleep`). The *user-idle* kinds
+  on purpose: they hold on battery too, unlike `PreventSystemSleep`
+  (`caffeinate -s`), which is AC-only. Neither overrides the lid or a critical
+  battery. Session-only, never in the config — the assertions die with the
+  process, so a quit or crash can't leave the Mac awake. Toggled from Setup in
+  the menu or `caffeinateShortcut` (unassigned by default). While on,
+  AppDelegate shows a second status item (a coffee cup) that stays visible
+  even with `hideMenuBarIcon`, and clicking it switches Caffeinate off.
+  Permission-free.
 - `UpdateChecker.swift` — one HTTPS GET at `api.github.com/.../releases/latest`,
   behind the menu's Check for Updates…. It deliberately *only asks*: the cask
   owns installation, so there is nothing to download, verify or swap. Where

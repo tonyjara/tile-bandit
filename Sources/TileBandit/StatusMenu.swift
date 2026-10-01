@@ -91,6 +91,7 @@ private func menuSymbol(_ names: String...) -> NSImage {
     func menuApplyLayout()
     func menuMaximizeWindow()
     func menuToggleKeyModifications()
+    func menuToggleCaffeinate()
     func menuOpenSettings()
     func menuReloadConfig()
     func menuCheckForUpdates()
@@ -110,6 +111,7 @@ private func menuSymbol(_ names: String...) -> NSImage {
 struct StatusMenu {
     let store: ConfigStore
     let activeWorkspaceID: UUID?
+    let caffeinated: Bool
     unowned let target: StatusMenuActions
 
     func build() -> NSMenu {
@@ -281,6 +283,16 @@ struct StatusMenu {
     }
 
     private func addSetup(to menu: NSMenu) {
+        let caffeinate = add(
+            "Caffeinate",
+            #selector(StatusMenuActions.menuToggleCaffeinate),
+            symbol: "cup.and.saucer",
+            shortcut: store.config.caffeinateShortcut,
+            to: menu
+        )
+        caffeinate.state = caffeinated ? .on : .off
+        caffeinate.toolTip = "Keep the display and the Mac awake until switched off or Tile Bandit quits"
+
         // The master switch belongs in the menu bar rather than only in
         // Settings: when a remap misfires, the keyboard is exactly the thing
         // you can't use to go fix it.

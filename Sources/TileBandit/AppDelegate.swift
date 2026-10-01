@@ -13,8 +13,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let keyDebugger = KeyDebugger()
     private let shortcutRecorder = ShortcutRecorder()
     private let maximizeHold = MaximizeHold()
+    private let caffeine = Caffeine()
 
     private var statusItem: NSStatusItem!
+    /// The coffee cup, present only while caffeinated — see `rebuildMenu()`.
+    private var caffeineItem: NSStatusItem?
     /// Who was in front when the status menu opened — see `menuMaximizeWindow`.
     private var frontmostWhenMenuOpened: NSRunningApplication?
     private var settingsWindow: NSWindow?
@@ -111,6 +114,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// quitting hands every keyboard back unmodified.
     func applicationWillTerminate(_ notification: Notification) {
         keyMods.shutDown()
+        // The assertions would die with the process anyway; releasing them
+        // here just makes it explicit.
+        caffeine.stop()
     }
 
     private func registerHotkeys() {
@@ -179,6 +185,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.openSettings()
             }
         }
+        if let shortcut = store.config.caffeinateShortcut {
+            hotkeys.register(shortcut) { [weak self] in
+                guard let self else { return }
+                self.keyDebugger.recordHotkeyFired(shortcut, action: "Toggle caffeinate")
+                self.toggleCaffeinate()
+            }
+        }
         if let shortcut = store.config.reloadConfigShortcut {
             hotkeys.register(shortcut) { [weak self] in
                 guard let self else { return }
@@ -201,13 +214,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let name = store.config.showWorkspaceName ? active?.name : nil
         statusItem.button?.title = name.map { " \($0)" } ?? ""
 
+        updateCaffeineItem()
+
         let menu = StatusMenu(
             store: store,
             activeWorkspaceID: engine.activeWorkspaceID,
+            caffeinated: caffeine.isActive,
             target: self
         ).build()
         menu.delegate = self
         statusItem.menu = menu
+    }
+
+    /// A second status item rather than a badge on the first: it stays put
+    /// when the main icon is hidden (`hideMenuBarIcon`) — a Mac being kept
+    /// awake is worth seeing even then — and clicking it is the way off.
+    private func updateCaffeineItem() {
+        guard caffeine.isActive else {
+            if let item = caffeineItem { NSStatusBar.system.removeStatusItem(item) }
+            caffeineItem = nil
+            return
+        }
+        guard caffeineItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        let image = NSImage(systemSymbolName: "cup.and.saucer.fill", accessibilityDescription: "Caffeinated")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .regular))
+        image?.isTemplate = true
+        item.button?.image = image
+        item.button?.toolTip = "Caffeinated — the Mac won't idle-sleep. Click to let it."
+        item.button?.target = self
+        item.button?.action = #selector(menuToggleCaffeinate)
+        caffeineItem = item
+    }
+
+    private func toggleCaffeinate() {
+        caffeine.toggle()
+        rebuildMenu()
     }
 
     private func applyActiveLayout() {
@@ -316,6 +358,10 @@ extension AppDelegate: StatusMenuActions {
     /// point, since the thing it switches off is the keyboard.
     @objc func menuToggleKeyModifications() {
         store.config.keyModifications.toggle()
+    }
+
+    @objc func menuToggleCaffeinate() {
+        toggleCaffeinate()
     }
 
     @objc func menuOpenSettings() {
