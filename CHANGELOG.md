@@ -4,6 +4,17 @@ Notable changes, newest first. Versions follow the number in
 `Resources/Info.plist`, which is what `make app` stamps into the bundle and what
 the Homebrew cask points at.
 
+## 1.4.0
+
+### Added
+
+- **Caffeinate** keeps the Mac awake: no idle sleep, no display sleep and no
+  screen saver, on battery as well as plugged in. Turn it on from the menu's
+  Setup section, or assign it a shortcut in Settings → Shortcuts (it has none
+  by default). While it's on, a coffee cup sits in the menu bar, even if the
+  main icon is hidden, and clicking the cup turns it off. It lasts only until
+  Tile Bandit quits, and closing the lid still sleeps the Mac.
+
 ## 1.3.0
 
 ### Added
