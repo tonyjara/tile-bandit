@@ -474,7 +474,11 @@ extension AppDelegate: StatusMenuActions {
             // The tail is where brew puts the reason; the rest is progress chatter.
             let tail = output.split(separator: "\n").suffix(8).joined(separator: "\n")
             alert.informativeText = "\(step) exited \(status).\n\n\(tail)"
-        case let UpdateInstaller.Failure.unchanged(installed):
+        case let UpdateInstaller.Failure.unchanged(installed, updateOutput?):
+            let tail = updateOutput.split(separator: "\n").suffix(8).joined(separator: "\n")
+            alert.informativeText = "The installed copy is still \(installed). brew update failed first, "
+                + "which is the likely reason:\n\n\(tail)"
+        case let UpdateInstaller.Failure.unchanged(installed, nil):
             alert.informativeText = "Homebrew finished, but the installed copy is still \(installed). "
                 + "The tap may not have the release yet — try again in a few minutes."
         default:

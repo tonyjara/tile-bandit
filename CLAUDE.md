@@ -114,8 +114,9 @@ sourcekit-lsp, which understands SPM natively).
   owns installation, so there is nothing to download, verify or swap. Where
   Homebrew really installed us, `UpdateInstaller.swift` offers Install and
   Relaunch — it runs `brew update` + `brew upgrade --cask tile-bandit` itself
-  (Homebrew still does the installing), checks the bundle's Info.plist for the
-  new version, then a detached `sh` waits for our pid to exit and `open`s the
+  (Homebrew still does the installing; a failed `brew update` is logged, not
+  fatal, since one dead tap fails it after every other tap updated), checks the
+  bundle's Info.plist for the new version, then a detached `sh` waits for our pid to exit and `open`s the
   bundle again. Anywhere else the alert hands over the command instead. Sparkle would be a
   dependency plus a signing key, and two updaters disagreeing about what's
   installed is worse than having none. Permission-free, on demand only — no

@@ -15,7 +15,9 @@ enum UpdateInstaller {
     enum Failure: Error {
         case brew(step: String, status: Int32, output: String)
         case cancelled
-        case unchanged(installed: String)
+        /// `updateOutput` is set when `brew update` had failed first — then
+        /// it, not the upgrade, is the likelier reason nothing changed.
+        case unchanged(installed: String, updateOutput: String?)
     }
 
     /// The `brew` that installed us. A Finder-launched app has no shell PATH,
@@ -38,9 +40,23 @@ enum UpdateInstaller {
     /// recently, and a tap fetched this morning doesn't know about a release
     /// cut this afternoon — it would report "already up to date" and install
     /// nothing.
+    ///
+    /// Its failure is not fatal, though. `brew update` exits 1 when *any* tap
+    /// fails to fetch — classically one Homebrew has since deleted
+    /// (homebrew/cask-fonts, homebrew/cask-versions) — after updating every
+    /// other tap, ours included. Stopping there would block the upgrade over
+    /// a problem that has nothing to do with it. The version check below is
+    /// the real test either way, and it's handed the update's output so a
+    /// stale tap still gets the blame when it deserves it.
     static func install(expecting latest: String, running: RunningProcess) async throws {
         guard let brew else { throw Failure.brew(step: "brew", status: -1, output: "Homebrew not found.") }
-        try await running.run(brew, ["update", "--quiet"], step: "brew update", interruptible: true)
+        var updateOutput: String?
+        do {
+            try await running.run(brew, ["update", "--quiet"], step: "brew update", interruptible: true)
+        } catch let Failure.brew(_, _, output) {
+            NSLog("TileBandit: brew update failed, upgrading anyway:\n\(output)")
+            updateOutput = output
+        }
         // Not interruptible: killing brew halfway through swapping the bundle
         // is how you end up with no app at all. Cancel still skips the relaunch.
         try await running.run(brew, ["upgrade", "--cask", cask], step: "brew upgrade", interruptible: false)
@@ -51,7 +67,7 @@ enum UpdateInstaller {
         let plist = Bundle.main.bundleURL.appendingPathComponent("Contents/Info.plist")
         let installed = (NSDictionary(contentsOf: plist)?["CFBundleShortVersionString"] as? String) ?? "?"
         if UpdateChecker.isNewer(latest, than: installed) {
-            throw Failure.unchanged(installed: installed)
+            throw Failure.unchanged(installed: installed, updateOutput: updateOutput)
         }
     }
 
