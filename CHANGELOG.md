@@ -4,6 +4,29 @@ Notable changes, newest first. Versions follow the number in
 `Resources/Info.plist`, which is what `make app` stamps into the bundle and what
 the Homebrew cask points at.
 
+## Unreleased
+
+### Added
+
+- **fn (Globe) can be remapped** on Apple keyboards, including a MacBook's
+  built-in one: as the key being remapped, and as the key a remap sends. Taking
+  fn away also takes what it does — fn plus the top row stops sending F1–F12,
+  and the Globe key's own action (input source, emoji, dictation) stops — while
+  a key remapped *to* fn takes all of that over. On keyboards that handle fn
+  themselves and never send it to the Mac, it's listed as unavailable, with the
+  reason. It can't be a hold key's tap or part of a chord.
+
+### Changed
+
+- **Add Mapping listens for the keys.** Press the key to remap, then the key it
+  should send, or pick either from the list. Your modifications are paused
+  while it listens, so a key that's already remapped is captured as itself, and
+  pressing fn or Caps Lock to pick them doesn't switch input source or leave
+  Caps Lock on. The mapping joins the list only once it's complete — scrolled
+  into view and briefly highlighted — and Esc or Cancel at any step leaves
+  nothing behind. It used to append a half-made row at the bottom of the list,
+  often out of sight.
+
 ## 1.4.0
 
 ### Added

@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotkeys = HotkeyManager()
     private let keyDebugger = KeyDebugger()
     private let shortcutRecorder = ShortcutRecorder()
+    private let keyCapture = KeyCapture()
     private let maximizeHold = MaximizeHold()
     private let caffeine = Caffeine()
 
@@ -45,7 +46,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // While recording a shortcut, Carbon hotkeys must be off (they'd
         // consume matching combos before the recorder's monitor sees them)
         // and KeyDebugger must pass keys through.
-        keyDebugger.shouldPassThrough = { [weak self] in self?.shortcutRecorder.isRecording ?? false }
+        keyDebugger.shouldPassThrough = { [weak self] in
+            guard let self else { return false }
+            return self.shortcutRecorder.isRecording || self.keyCapture.isActive
+        }
         shortcutRecorder.$activeID
             .map { $0 != nil }
             .removeDuplicates()
@@ -60,6 +64,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             .store(in: &cancellables)
+
+        // Add Mapping listens with every key modification paused, so a key
+        // that's already remapped reports as itself — see KeyCapture.
+        keyCapture.pauseModifications = { [weak self] ready in
+            self?.keyMods.beginCapture(ready: ready)
+        }
+        keyCapture.resumeModifications = { [weak self] in
+            guard let self else { return }
+            self.keyMods.endCapture(config: self.store.config, attached: self.keyboards.attached)
+        }
 
         store.$config
             .removeDuplicates()
@@ -271,6 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     store: store,
                     keyDebugger: keyDebugger,
                     recorder: shortcutRecorder,
+                    keyCapture: keyCapture,
                     displays: displays,
                     keyboards: keyboards
                 )
@@ -292,12 +307,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             // Resigning key covers closing, minimising and switching to
             // another app alike: the debugger listens only while it's in front.
+            // So does a key capture, and for a stronger reason — it holds every
+            // key modification paused, which mustn't outlast the window the
+            // keys were meant for.
             settingsResignObserver = NotificationCenter.default.addObserver(
                 forName: NSWindow.didResignKeyNotification,
                 object: window,
                 queue: .main
             ) { [weak self] _ in
                 self?.keyDebugger.stop()
+                self?.keyCapture.cancel()
             }
         }
         settingsWindow?.makeKeyAndOrderFront(nil)

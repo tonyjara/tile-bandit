@@ -71,6 +71,60 @@ enum KeyboardIdentity {
         return nil
     }
 
+    /// Whether this keyboard sends an fn key the Mac can see, and so whether
+    /// fn can be remapped *from* on it. nil when it can't be told, because the
+    /// keyboard isn't attached.
+    ///
+    /// Apple keyboards say so on their HID event service, as
+    /// `FnModifierUsagePage`/`FnModifierUsage` (0xFF/0x03, `HIDKeys.fn`) —
+    /// that's the built-in one's, read off the registry. Everyone else's fn is
+    /// handled inside the keyboard and never sent, so there's nothing for a
+    /// mapping to catch. Apple's own vendor ids count too, as a fallback for
+    /// an Apple keyboard that doesn't publish the property (not verified on a
+    /// Magic Keyboard).
+    static func reportsFn(_ ref: KeyboardRef) -> Bool? {
+        let services = eventServiceProperties(of: ref)
+        guard !services.isEmpty else { return nil }
+        let declared = services.contains {
+            $0["FnModifierUsagePage"] as? Int == HIDKeys.fn.page && $0["FnModifierUsage"] as? Int == HIDKeys.fn.usage
+        }
+        return declared || ref.isBuiltIn || [0x05AC, 0x004C].contains(ref.vendorID ?? 0)
+    }
+
+    /// The properties of every IOHIDEventService `matchingJSON(for:)` selects
+    /// — the entries hidutil writes a UserKeyMapping to, and where a keyboard
+    /// declares its fn key. Empty when nothing matches (unplugged).
+    static func eventServiceProperties(of ref: KeyboardRef) -> [[String: Any]] {
+        guard let wanted = matchingProperties(for: ref) else { return [] }
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(
+            kIOMainPortDefault, IOServiceMatching("IOHIDEventService"), &iterator
+        ) == KERN_SUCCESS else { return [] }
+        defer { IOObjectRelease(iterator) }
+
+        var found: [[String: Any]] = []
+        while case let service = IOIteratorNext(iterator), service != 0 {
+            defer { IOObjectRelease(service) }
+            var unmanaged: Unmanaged<CFMutableDictionary>?
+            guard IORegistryEntryCreateCFProperties(service, &unmanaged, kCFAllocatorDefault, 0) == KERN_SUCCESS,
+                  let properties = unmanaged?.takeRetainedValue() as? [String: Any],
+                  matches(properties, wanted)
+            else { continue }
+            found.append(properties)
+        }
+        return found
+    }
+
+    /// Every key in `wanted` present and equal — the registry side of the
+    /// dictionary hidutil takes as `--matching`.
+    private static func matches(_ properties: [String: Any], _ wanted: [String: Any]) -> Bool {
+        wanted.allSatisfy { key, value in
+            guard let actual = properties[key] as? NSObject, let expected = value as? NSObject
+            else { return false }
+            return actual.isEqual(expected)
+        }
+    }
+
     private static func reference(from properties: [String: Any]) -> KeyboardRef {
         let vendor = properties[kIOHIDVendorIDKey] as? Int
         let product = properties[kIOHIDProductIDKey] as? Int

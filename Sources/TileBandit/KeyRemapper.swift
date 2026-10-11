@@ -116,6 +116,19 @@ struct KeyRemapPlan: Equatable {
         return plan
     }
 
+    /// What every attached keyboard carries while Settings listens for a key:
+    /// none of its modifications — so a key that's already remapped reports
+    /// as itself, rather than as what it became or as its carrier — and only
+    /// fn's stand-in (see `HIDKeys.fnCaptureStandIn`). No dual roles, so the
+    /// event tap stands down with the rest.
+    static func capture(attached: [KeyboardRef]) -> KeyRemapPlan {
+        var plan = KeyRemapPlan()
+        plan.attachedKeys = Set(attached.map(\.key))
+        let standIn = Pair(src: HIDKeys.fn.hidUsage, dst: HIDKeys.fnCaptureStandIn.hidUsage)
+        plan.devices = attached.map { Device(keyboard: $0, pairs: [standIn]) }
+        return plan
+    }
+
     /// The chord that fires for `code` right now, or nil if the key is its
     /// ordinary self. `layers` is the carrier keys currently held, in the order
     /// they should be consulted — a held layer is a more specific statement
@@ -175,7 +188,13 @@ final class KeyRemapper {
     private var applied: [String: KeyboardRef] = [:]
     private let queue = DispatchQueue(label: "com.tilebandit.hidutil")
 
-    func apply(_ plan: KeyRemapPlan) {
+    /// `then` runs on the main queue once every hidutil call this apply made
+    /// has finished — the writes are queued in order on one serial queue, so
+    /// a block queued behind them waits for all of them.
+    func apply(_ plan: KeyRemapPlan, then: (() -> Void)? = nil) {
+        defer {
+            if let then { queue.async { DispatchQueue.main.async(execute: then) } }
+        }
         // Gone means its mapping is already gone with it. Forget those, so a
         // replug reapplies instead of being skipped as a no-op.
         for key in Array(applied.keys) where !plan.attachedKeys.contains(key) {
@@ -257,22 +276,8 @@ final class KeyRemapper {
     /// publishes disagree with each other — a half-written state that should be
     /// rewritten rather than trusted.
     private static func liveMapping(on keyboard: KeyboardRef) -> Set<KeyRemapPlan.Pair>? {
-        guard let wanted = KeyboardIdentity.matchingProperties(for: keyboard) else { return nil }
-        var iterator: io_iterator_t = 0
-        guard IOServiceGetMatchingServices(
-            kIOMainPortDefault, IOServiceMatching("IOHIDEventService"), &iterator
-        ) == KERN_SUCCESS else { return nil }
-        defer { IOObjectRelease(iterator) }
-
         var mapping: Set<KeyRemapPlan.Pair>?
-        while case let service = IOIteratorNext(iterator), service != 0 {
-            defer { IOObjectRelease(service) }
-            var unmanaged: Unmanaged<CFMutableDictionary>?
-            guard IORegistryEntryCreateCFProperties(service, &unmanaged, kCFAllocatorDefault, 0) == KERN_SUCCESS,
-                  let properties = unmanaged?.takeRetainedValue() as? [String: Any],
-                  matches(properties, wanted)
-            else { continue }
-
+        for properties in KeyboardIdentity.eventServiceProperties(of: keyboard) {
             let nested = properties["HIDEventServiceProperties"] as? [String: Any] ?? [:]
             let entries = nested["UserKeyMapping"] as? [[String: Any]] ?? []
             let pairs = Set(entries.compactMap { entry -> KeyRemapPlan.Pair? in
@@ -287,16 +292,6 @@ final class KeyRemapper {
             mapping = pairs
         }
         return mapping
-    }
-
-    /// Every key in `wanted` present and equal — the registry side of the
-    /// dictionary hidutil takes as `--matching`.
-    private static func matches(_ properties: [String: Any], _ wanted: [String: Any]) -> Bool {
-        wanted.allSatisfy { key, value in
-            guard let actual = properties[key] as? NSObject, let expected = value as? NSObject
-            else { return false }
-            return actual.isEqual(expected)
-        }
     }
 }
 
@@ -320,14 +315,37 @@ enum CapsLock {
     /// Failure is silent on purpose — a caps lock we couldn't reach is an
     /// annoyance, not something worth an alert on top of it.
     static func turnOff() {
+        if set(false) {
+            NSLog("TileBandit: caps lock was on and its key is remapped away — switched it off")
+        }
+    }
+
+    /// Whether caps lock is on; nil if the state couldn't be read.
+    static var isOn: Bool? {
+        var result: Bool?
+        withParameterConnection { connect in
+            var state = false
+            if IOHIDGetModifierLockState(connect, Int32(kIOHIDCapsLockState), &state) == KERN_SUCCESS {
+                result = state
+            }
+        }
+        return result
+    }
+
+    /// Puts caps lock in `on`, reading first so a state that's already right
+    /// isn't written (and the LED isn't blinked). True when it had to change.
+    /// KeyCapture uses it to undo a caps lock pressed only to be captured.
+    @discardableResult
+    static func set(_ on: Bool) -> Bool {
+        var changed = false
         withParameterConnection { connect in
             var state = false
             guard IOHIDGetModifierLockState(connect, Int32(kIOHIDCapsLockState), &state) == KERN_SUCCESS,
-                  state
+                  state != on
             else { return }
-            IOHIDSetModifierLockState(connect, Int32(kIOHIDCapsLockState), false)
-            NSLog("TileBandit: caps lock was on and its key is remapped away — switched it off")
+            changed = IOHIDSetModifierLockState(connect, Int32(kIOHIDCapsLockState), on) == KERN_SUCCESS
         }
+        return changed
     }
 
     private static func withParameterConnection(_ body: (io_connect_t) -> Void) {
@@ -354,16 +372,30 @@ final class KeyModEngine {
     private let remapper = KeyRemapper()
     private let tap = DualRoleTap()
     private(set) var plan = KeyRemapPlan()
+    private var attached: [KeyboardRef] = []
+
+    /// True while Settings is listening for a key (see KeyCapture): every
+    /// keyboard is handed back unmodified apart from fn's stand-in, and an
+    /// apply that lands meanwhile — a rescan, a wake, a config edit — updates
+    /// the plan without undoing that.
+    private(set) var isCapturing = false
 
     /// True when a dual-role mapping is configured but the tap couldn't be
     /// created — i.e. Accessibility is missing. The plain remaps still work.
-    var needsAccessibility: Bool { plan.needsEventTap && !tap.isRunning }
+    /// Not while capturing: the tap is down on purpose then.
+    var needsAccessibility: Bool { plan.needsEventTap && !tap.isRunning && !isCapturing }
 
     /// What the tap is currently watching, for the menu and the key debugger.
     var activeDualRoles: [KeyRemapPlan.DualRole] { Array(plan.dualRoles.values) }
 
     func apply(config: Config, attached: [KeyboardRef]) {
         plan = KeyRemapPlan.resolve(config: config, attached: attached)
+        self.attached = attached
+        guard !isCapturing else {
+            // A keyboard plugged in mid-capture still has to come up paused.
+            remapper.apply(KeyRemapPlan.capture(attached: attached))
+            return
+        }
         remapper.apply(plan)
         tap.update(plan)
         // Runs on every apply, not just when the plan changes: the caps state
@@ -375,8 +407,26 @@ final class KeyModEngine {
         }
     }
 
+    /// Pauses every modification so a key can be captured as itself. `ready`
+    /// runs once hidutil has actually rewritten the keyboards — until then a
+    /// press would still arrive remapped.
+    func beginCapture(ready: @escaping () -> Void) {
+        isCapturing = true
+        tap.update(KeyRemapPlan())
+        remapper.apply(KeyRemapPlan.capture(attached: attached), then: ready)
+    }
+
+    /// Puts the config's modifications back — including whatever the capture
+    /// just added to it.
+    func endCapture(config: Config, attached: [KeyboardRef]) {
+        guard isCapturing else { return }
+        isCapturing = false
+        apply(config: config, attached: attached)
+    }
+
     /// Leaves no trace on the machine: hidutil mappings cleared, tap torn down.
     func shutDown() {
+        isCapturing = false
         tap.stop()
         remapper.clearAll()
         plan = KeyRemapPlan()

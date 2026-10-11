@@ -879,8 +879,14 @@ struct KeyChord: Codable, Equatable, Hashable, Identifiable {
     }
 
     /// A chord whose `to` names a key we don't know is dropped; one with no
-    /// `to` at all is the deliberate "do nothing" case, not a mistake.
-    var isUsable: Bool { enabled && from.isKnown && (to?.isKnown ?? true) }
+    /// `to` at all is the deliberate "do nothing" case, not a mistake. Both
+    /// ends have to be keys the event tap can see pressed and send, which fn
+    /// isn't — it's sent as a flag (`send`) instead.
+    var isUsable: Bool {
+        guard enabled, let trigger = from.key, trigger.isPostable else { return false }
+        guard let to else { return true }
+        return to.key?.isPostable ?? false
+    }
 
     /// "⌘H → nothing", "Q → ⌥A"
     var summary: String {
@@ -952,11 +958,25 @@ struct KeyMapping: Codable, Equatable, Hashable, Identifiable {
     var isDualRole: Bool { !(hold ?? []).isEmpty }
 
     /// A mapping with an unknown key name, or with nothing to do, is carried in
-    /// the config but never applied.
+    /// the config but never applied. Neither is one whose tap would have to
+    /// send fn: a plain remap *to* fn is hidutil's job and works, but a
+    /// dual-role key's tap is posted by the event tap, which can't (see
+    /// `HIDKey.isPostable`).
     var isUsable: Bool {
         guard enabled, from.isKnown else { return false }
-        if isDualRole { return to?.isKnown ?? true }
+        if isDualRole {
+            guard let to else { return true }
+            return to.key?.isPostable ?? false
+        }
         return to?.isKnown ?? false
+    }
+
+    /// Why this mapping is switched on and still does nothing, when the reason
+    /// is something the editor can't simply refuse — a tap action that was a
+    /// fine remap target until a hold was added to the key.
+    var problem: String? {
+        guard isDualRole, let tap = to?.key, !tap.isPostable else { return nil }
+        return "A key with a hold can't tap \(tap.label) — that only works as a plain remap. Pick another tap key, or Nothing."
     }
 
     /// "Caps Lock → Escape / hold ⌃⌥⇧⌘"

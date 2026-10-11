@@ -7,6 +7,7 @@ struct SettingsView: View {
     @ObservedObject var store: ConfigStore
     @ObservedObject var keyDebugger: KeyDebugger
     @ObservedObject var recorder: ShortcutRecorder
+    let keyCapture: KeyCapture
     let displays: DisplayProfileManager
     let keyboards: KeyboardManager
 
@@ -41,7 +42,7 @@ struct SettingsView: View {
                 .tabItem { Text("Shortcuts") }
             DisplaysTab(store: store, displays: displays, profileID: $profileID)
                 .tabItem { Text("Displays") }
-            KeyModificationsTab(store: store, keyboards: keyboards, debugger: keyDebugger)
+            KeyModificationsTab(store: store, keyboards: keyboards, debugger: keyDebugger, capture: keyCapture)
                 .tabItem { Text("Key Modifications") }
             FloatingAppsTab(store: store)
                 .tabItem { Text("Floating Apps") }

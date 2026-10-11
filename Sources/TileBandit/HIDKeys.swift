@@ -2,8 +2,8 @@ import CoreGraphics
 import Foundation
 
 /// One key in the three vocabularies this app has to speak at once: a
-/// hand-editable `name` for the config, a HID `usage` (page 0x07) for
-/// hidutil's UserKeyMapping, and a virtual `keyCode` for the event tap.
+/// hand-editable `name` for the config, a HID `usage` for hidutil's
+/// UserKeyMapping, and a virtual `keyCode` for the event tap.
 ///
 /// Keeping all three in one table is what lets a mapping be written once and
 /// then routed to whichever engine can do it — see KeyMapping.
@@ -11,15 +11,27 @@ struct HIDKey: Equatable, Hashable, Identifiable {
     let name: String
     let usage: Int
     let keyCode: CGKeyCode
+    /// 0x07, the keyboard page, for every key but one: fn lives on Apple's
+    /// vendor page (0xFF).
+    var page: Int = 0x07
+    /// For the one key whose name doesn't spell its label.
+    var displayName: String?
 
     var id: String { name }
 
-    /// The full HID usage value hidutil wants: usage page 0x07 in the high word.
-    var hidUsage: Int { 0x700000000 | usage }
+    /// The full HID usage value hidutil wants: the usage page in the high word.
+    var hidUsage: Int { page << 32 | usage }
+
+    /// Whether the event tap can send this key as an ordinary press — a tap
+    /// action or a chord's output. fn can't be: macOS reads it as a modifier
+    /// *state*, not a key, so a synthesized fn press is just a stray keycode.
+    /// A chord sends fn as a flag instead (`ModifierSet.function`).
+    var isPostable: Bool { page == 0x07 }
 
     /// "capsLock" -> "Caps Lock", "a" -> "A". Derived rather than stored;
     /// the table is long enough without a label column.
     var label: String {
+        if let displayName { return displayName }
         if name.count == 1 { return name.uppercased() }
         var out = ""
         for character in name {
@@ -33,8 +45,8 @@ struct HIDKey: Equatable, Hashable, Identifiable {
 /// The supported key set, and the lookups over it.
 ///
 /// Deliberately not the whole HID table: these are the keys a remap is
-/// plausibly aimed at, each one verified to have a virtual keycode so the
-/// event tap can synthesize it.
+/// plausibly aimed at, each one verified to have a virtual keycode — which the
+/// event tap can synthesize for all of them but fn (see `isPostable`).
 /// A run of the key table, for the settings pickers — ninety-odd keys in one
 /// flat popup is a wall.
 struct KeyGroup: Identifiable {
@@ -60,7 +72,10 @@ enum HIDKeys {
 
     /// Lenient on purpose — the config is hand-edited, so "caps_lock",
     /// "CapsLock" and "caps lock" all find the same key.
-    static func named(_ name: String) -> HIDKey? { byName[normalize(name)] }
+    static func named(_ name: String) -> HIDKey? {
+        let wanted = normalize(name)
+        return byName[wanted] ?? (wanted == "globe" ? fn : nil)
+    }
 
     static func withKeyCode(_ code: CGKeyCode) -> HIDKey? { byKeyCode[code] }
 
@@ -69,6 +84,37 @@ enum HIDKeys {
     /// out rather than looked up so a comparison against it can't quietly
     /// become nil == nil.
     static let capsLock = HIDKey(name: "capsLock", usage: 0x39, keyCode: 57)
+
+    /// The fn / Globe key: usage 0x03 on Apple's vendor top-case page (0xFF),
+    /// which is how Apple keyboards report it — the built-in keyboard says so
+    /// itself, as `FnModifierUsagePage`/`FnModifierUsage` on its HID service.
+    ///
+    /// Verified on a MacBook Pro's built-in keyboard (M2 Max, macOS 27) both
+    /// ways round through hidutil. As a source, fn arrives as whatever it was
+    /// mapped to, and the system stops seeing an fn press at all: fn+top row
+    /// sends the media keys rather than F1–F12, and the Globe key's own action
+    /// ("Press 🌐 key to") no longer fires. As a target, the key mapped onto
+    /// it takes over all of that — top row and Globe action included.
+    ///
+    /// Only Apple keyboards send it; everyone else's fn is handled inside the
+    /// keyboard and never reaches the Mac — see `KeyboardIdentity.reportsFn`.
+    /// Never sent by the event tap — see `isPostable`. Its virtual keycode
+    /// (kVK_Function) is only ever *read*, off a flagsChanged event.
+    static let fn = HIDKey(name: "fn", usage: 0x03, keyCode: 63, page: 0xFF, displayName: "fn (Globe)")
+
+    /// What fn is rewritten to while Settings listens for a key (see
+    /// KeyCapture). Pressing fn on its own fires the Globe key's action —
+    /// switching input source, opening the emoji picker, starting dictation —
+    /// and swallowing the event in our own window doesn't stop it, so the
+    /// press would do something besides being captured. Routed to a stand-in it
+    /// reaches the listener as itself and nothing else happens.
+    ///
+    /// F20 because no Mac keyboard has one (Apple's extended keyboard stops at
+    /// F19), so keyCode 90 while listening can only be fn — a programmable
+    /// board that really sends F20 would read as fn, which is the price. Its
+    /// use as a carrier doesn't collide: the event tap is paused while
+    /// listening, along with every other modification.
+    static let fnCaptureStandIn = named("f20")!
 
     /// Keys handed out as carriers for dual-role mappings: hidutil rewrites the
     /// real key to one of these at the HID layer, and the event tap watches for
@@ -155,5 +201,6 @@ enum HIDKeys {
         HIDKey(name: "rightShift", usage: 0xE5, keyCode: 60),
         HIDKey(name: "rightOption", usage: 0xE6, keyCode: 61),
         HIDKey(name: "rightCommand", usage: 0xE7, keyCode: 54),
+        fn,
     ]
 }

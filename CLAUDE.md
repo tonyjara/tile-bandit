@@ -53,7 +53,10 @@ sourcekit-lsp, which understands SPM natively).
   own rather than through `applyConfig()`. `applicationWillTerminate` clears
   them: key modifications are the one thing this app leaves *on the machine*
   rather than in its own process, and a carrier key with nothing left to
-  interpret it would be a dead key.
+  interpret it would be a dead key. Also owns `KeyCapture` and wires its
+  pause/resume to `KeyModEngine.beginCapture`/`endCapture`; the settings
+  window resigning key cancels a capture, since it holds every key
+  modification paused and mustn't outlast the window the keys were meant for.
 - `StatusMenu.swift` — the menu bar menu, kept apart from AppDelegate because
   it is the one purely *view* part of the app. Four groups, in the order you
   need them: the brand row (Copperplate — the nearest thing macOS ships to a
@@ -163,7 +166,12 @@ sourcekit-lsp, which understands SPM natively).
   two places for a reason: inside `KeyMapping.chords` they're the layer a hold
   opens and are device-scoped for free, because the hold gating them is;
   in `Config.chords` they're global and honestly so, since a plain keypress
-  carries no device identity an event tap can read. `ModifierSet.function`
+  carries no device identity an event tap can read. fn is a *key* only to
+  hidutil: a plain `KeyMapping` may come from it or go to it, but a dual-role
+  key's tap and both ends of a `KeyChord` are posted or watched by the event
+  tap, which can't (`HIDKey.isPostable`) — `isUsable` refuses those, and
+  `KeyMapping.problem` says why for the one case the editor can't simply
+  refuse (a tap of fn that was fine until a hold was added). `ModifierSet.function`
   (`fn`) is send-only — it can emit fn+F11 but is never matched on, because the
   laptop keyboard raises it on its own in ways that would make an exact match
   unpredictable. `KeyboardProfile.modifiedAt` is rounded to whole seconds
@@ -314,7 +322,7 @@ sourcekit-lsp, which understands SPM natively).
   the remapping editor. Hotkeys stay registered while it runs — the hotkey
   handlers report firings via `recordHotkeyFired` since Carbon consumes those
   events before NSEvent monitors see them. Passes events through untouched
-  while ShortcutRecorder is capturing (`shouldPassThrough`).
+  while ShortcutRecorder or KeyCapture is capturing (`shouldPassThrough`).
 - `ShortcutRecorder.swift` — captures the next key combo for the "Reassign"
   buttons in Settings, via a *local* NSEvent monitor (permission-free).
   While recording, AppDelegate unregisters all Carbon hotkeys (a registered
@@ -323,13 +331,41 @@ sourcekit-lsp, which understands SPM natively).
   live recording so hotkeys can't stay unregistered. Keys resolve via
   `HotkeyManager.keyNames` (keyCode → name) so shifted/optioned characters
   record correctly.
+- `KeyCapture.swift` — captures single physical keys for Add Mapping, via a
+  *local* NSEvent monitor (permission-free, for the same reason as above).
+  The keys most worth capturing are the ones already remapped, and a remapped
+  key reports as what it became — so the whole add runs with every
+  modification paused (`pauseModifications`, which AppDelegate points at
+  `KeyModEngine.beginCapture`), and `phase` only reaches `.listening` once that
+  pause is on the hardware. Two keys do more than report themselves: fn alone
+  fires the Globe action (input source / emoji / dictation) even when the
+  event is swallowed in our window — observed, not assumed — so it arrives
+  through the F20 stand-in instead; and caps lock flips its state, which is put
+  back the moment it's captured (the restore's own flagsChanged lands on the
+  saved state, which is how it's told apart from a press). Only single keys
+  count: a modifier is taken on *release* if nothing else was pressed while it
+  was down, and a key pressed with ⌃⌥⇧⌘ held is refused — so ⌘W typed out of
+  habit captures nothing instead of filing "left ⌘ → W". Esc cancels; while a
+  menu is open (the panel's own list) keys go to the menu. A `session` counter
+  keeps a pause that completes after its capture was cancelled from reviving it.
 - `HIDKeys.swift` — the supported key set as one table, in the three
   vocabularies this app has to speak at once: a hand-editable name for the
-  config, a HID usage (page 0x07) for hidutil, and a virtual keycode for the
-  event tap. Lookups are lenient on the name (`caps_lock`, `CapsLock` and
+  config, a HID usage for hidutil, and a virtual keycode for the event tap.
+  Lookups are lenient on the name (`caps_lock`, `CapsLock` and
   `caps lock` all land on the same key) since the config is hand-edited.
   `carrierPool` is the F13–F20 block, handed out to dual-role mappings — see
   KeyRemapper for why that indirection exists.
+  Every key is on the keyboard page (0x07) except `fn` (also `globe` in the
+  config), which is usage 3 on Apple's vendor page — `0xFF00000003` to hidutil,
+  and what the built-in keyboard itself declares as `FnModifierUsagePage`/
+  `FnModifierUsage`. Verified both ways on an M2 Max MacBook Pro's built-in
+  keyboard: remapped *from*, fn arrives as its target and the system never
+  sees an fn press, so fn+top row sends the media keys instead of F1–F12 and
+  the Globe key's own action stops; a key remapped *to* fn takes all of that
+  over, Globe action included. It isn't `isPostable` — macOS reads fn as a
+  modifier state, so the tap can't synthesize it as a key (a chord sends it as
+  a flag instead). `fnCaptureStandIn` (F20) is what fn becomes while
+  KeyCapture listens.
 - `Keyboards.swift` — keyboard detection, the KeyboardRef half of what
   DisplayProfiles does for screens. `KeyboardIdentity` reads the IOKit registry
   (properties only — *opening* a HID device would prompt for Input Monitoring,
@@ -367,6 +403,12 @@ sourcekit-lsp, which understands SPM natively).
   that one *does* need the usage filter, because the trackpad beside it answers
   to the same name. (`BuiltIn` looks like the obvious matcher and isn't:
   hidutil doesn't accept it and silently matches nothing.)
+  `eventServiceProperties(of:)` walks the IOHIDEventServices that matcher
+  selects — the entries a UserKeyMapping lives on, read by KeyRemapper's
+  `liveMapping` — and `reportsFn(_:)` reads the fn declaration off them:
+  only Apple keyboards send fn at all (everyone else's is handled inside the
+  keyboard), so on any other board fn is listed as unavailable to remap *from*.
+  nil means unplugged, which gets the benefit of the doubt.
   `KeyboardManager` watches IOKit match/terminate notifications (debounced 0.8s;
   an empty read means the registry is mid-reconfiguration, never "no keyboards")
   plus wake, and files a profile for any keyboard it hasn't seen — cloned from
@@ -405,6 +447,16 @@ sourcekit-lsp, which understands SPM natively).
   we're reliably looking. Permission-free like the rest — IOHIDSystem's
   parameter connection needs no TCC grant and no root. `KeyModEngine` is the
   one switch over both engines; `shutDown()` leaves no trace.
+  `beginCapture(ready:)` is the pause behind Add Mapping: every attached
+  keyboard gets `KeyRemapPlan.capture(attached:)` — none of its modifications,
+  only fn's stand-in — and the tap stands down. `ready` comes through
+  `KeyRemapper.apply(_:then:)`, which queues it behind its own hidutil calls on
+  the serial queue, so listening starts only once the hardware has really
+  been handed back (≈40 ms on the built-in keyboard). An apply that arrives
+  mid-capture (a rescan, a wake, a config edit) refreshes the plan but keeps
+  the keyboards paused; `endCapture` applies the config again, by then
+  including whatever the capture added. `CapsLock.isOn`/`set(_:)` are the read
+  and write KeyCapture uses to undo a caps lock pressed only to be captured.
 - `DualRoleTap.swift` — the userspace half: keys that mean one thing tapped and
   another held. A `CGEventTap` at `.cghidEventTap` rewrites events before
   anything else sees them, including the WindowServer's hotkey dispatch, so a
@@ -481,10 +533,23 @@ sourcekit-lsp, which understands SPM natively).
   since "a new keyboard starts from the last edited keymaps" is exactly what
   that field means. The master toggle sits *outside* the region it disables —
   SwiftUI's `.disabled` is additive, so an inner `.disabled(false)` can't undo
-  an outer one, and the switch would have had no way back on. Keys are chosen
-  from a grouped popup rather than by pressing them: once a mapping is live the
-  physical key no longer reports itself (caps lock already arrives as F18), so
-  recording would capture the carrier. A hold's chords hang off the mapping
+  an outer one, and the switch would have had no way back on. Add Mapping
+  doesn't touch the list until it's finished: `AddMappingPanel` is pinned
+  *above* the list (never scrolled out of view) and walks two steps — press the
+  key to remap, then press the key it sends, either one also pickable from the
+  list (Escape, since Esc cancels; F1–F12 on a MacBook, whose top row sends
+  media keys) — holding the half-made mapping in view state (`draft`). Only the
+  finished mapping is appended, then scrolled to and tinted for a moment; Esc,
+  Cancel, switching keyboard or tab, or the window losing key leaves nothing
+  behind. A key that's already a source on this keyboard is refused, with its
+  row pointed at, since a second mapping from it would never fire. A row's own
+  pickers stay menus rather than recorders: by then its mapping is live, and
+  the physical key no longer reports itself (caps lock already arrives as F18).
+  `KeyPicker` is a `Menu` of toggles, not a `Picker`, so a key can be listed
+  greyed out with its reason (fn on a keyboard that never sends it, or as the
+  tap of a key with a hold) — a Picker has no disabled items, and refusing a
+  selection it has already shown leaves it displaying a key the model doesn't
+  hold. Chord pickers leave fn out altogether. A hold's chords hang off the mapping
   behind an explicit chevron button — DisclosureGroup's own chevron is
   invisible against a List row here. The KeyDebugger box sits at the top,
   outside the disabled region, since a diagnostic is most wanted exactly when

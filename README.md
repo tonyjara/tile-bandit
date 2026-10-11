@@ -189,6 +189,23 @@ what you're typing on, and every attached keyboard's map is live at once.
   most recently edited profile — so a new board inherits the map you've been
   tuning. With no profiles at all it stays empty: a first run invents nothing.
 
+**Add Mapping** listens: press the key you want to remap, then the key it
+should send — or pick either from the list, which is where Escape (Esc cancels)
+and a MacBook's F1–F12 (its top row sends brightness and volume) live. Your key
+modifications are paused while it listens, so a key that's already remapped is
+captured as itself rather than as what it became. Nothing joins the list until
+both keys are in; Esc or Cancel leaves nothing behind.
+
+**fn (Globe)** can be remapped on Apple keyboards — `"fn"` (or `"globe"`) in
+the config. Remap it *from* fn and you give up what fn does: fn plus the top
+row stops sending F1–F12 (the media keys come out instead), fn plus the arrows
+stops giving Home/End/Page Up/Page Down, and the Globe key's own action — the
+"Press 🌐 key to" setting, the emoji picker, dictation, the fn shortcuts —
+stops too, because macOS never sees an fn press. Remap another key *to* fn and
+that key takes all of it over. Other keyboards handle fn inside the keyboard,
+so it never reaches the Mac and is listed as unavailable there. fn can be a
+plain remap's target, but not a hold key's tap or part of a chord.
+
 Nothing outlives the app: quitting hands every keyboard back unmodified, and
 the menu bar has a master switch for when a mapping misbehaves and the keyboard
 is the thing you can't use to go fix it.
@@ -334,6 +351,7 @@ Sources/TileBandit/
 ├── DualRoleTap.swift        the CGEventTap: tap-vs-hold and chords
 ├── KeyDebugger.swift        "what key is this, really?"
 ├── ShortcutRecorder.swift   captures a combo for the Reassign buttons
+├── KeyCapture.swift         captures one key for Add Mapping, remaps paused
 ├── SettingsView.swift       SwiftUI settings window
 └── KeyModificationsTab.swift  … and its biggest tab
 ```
