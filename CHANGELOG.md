@@ -4,7 +4,7 @@ Notable changes, newest first. Versions follow the number in
 `Resources/Info.plist`, which is what `make app` stamps into the bundle and what
 the Homebrew cask points at.
 
-## Unreleased
+## 1.5.0
 
 ### Added
 
@@ -26,6 +26,14 @@ the Homebrew cask points at.
   into view and briefly highlighted — and Esc or Cancel at any step leaves
   nothing behind. It used to append a half-made row at the bottom of the list,
   often out of sight.
+
+### Fixed
+
+- **Install and Relaunch no longer stops when `brew update` fails.** One broken
+  tap makes `brew update` fail even after every other tap, Tile Bandit's
+  included, has updated, and that used to block the upgrade. It now carries on
+  with the upgrade; if nothing changes, the alert shows `brew update`'s error
+  as the likely reason.
 
 ## 1.4.0
 
