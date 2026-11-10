@@ -4,6 +4,21 @@ Notable changes, newest first. Versions follow the number in
 `Resources/Info.plist`, which is what `make app` stamps into the bundle and what
 the Homebrew cask points at.
 
+## Unreleased
+
+### Fixed
+
+- **The app chips under "Drag onto the grid" can be removed.** Taking a tile
+  off the grid sent its app back to that row, where nothing could delete it.
+  Every chip now has a ✕ that takes the app out of the workspace, and so does
+  right-clicking it (which also offers to take it off another display's grid).
+  Tiles have the same right-click menu, and Delete or Forward Delete removes
+  whichever tile or chip you clicked last.
+- **Removing an app from a workspace removes its tiles too.** It used to leave
+  the app's placements behind in the config, unseen, still marking the
+  workspace as having a layout and back in place if the app was added again.
+  Placements left over that way are cleaned up when the config loads.
+
 ## 1.5.0
 
 ### Added

@@ -287,6 +287,7 @@ struct Workspace: Codable, Equatable, Hashable, Identifiable {
             launchMissingApps: try container.decodeIfPresent(Bool.self, forKey: .launchMissingApps) ?? false,
             grids: grids
         )
+        prunePlacements()
     }
 
     /// Only the current keys — the pre-v3 ones are dropped on the next write.
@@ -340,6 +341,26 @@ struct Workspace: Codable, Equatable, Hashable, Identifiable {
     mutating func unplace(_ bundleId: String, on displayKey: String) {
         guard let index = grids.firstIndex(where: { $0.displayKey == displayKey }) else { return }
         grids[index].layout.removeValue(forKey: bundleId)
+    }
+
+    /// Take an app out of the workspace entirely: its row in the app list and
+    /// its tile on every display's grid. Removing only the row used to leave
+    /// the placements behind, invisible in the editor (it draws `apps`) but
+    /// still counted by `hasLayout` and back in place if the app was re-added.
+    mutating func removeApp(_ bundleId: String) {
+        apps.removeAll { $0.bundleId == bundleId }
+        for index in grids.indices {
+            grids[index].layout.removeValue(forKey: bundleId)
+        }
+    }
+
+    /// Drops placements for apps that aren't in the workspace — what older
+    /// builds (and hand-edits) left behind.
+    mutating func prunePlacements() {
+        let ids = Set(apps.map(\.bundleId))
+        for index in grids.indices {
+            grids[index].layout = grids[index].layout.filter { ids.contains($0.key) }
+        }
     }
 
     /// Point the grids at a set of displays: the i-th grid moves to the i-th

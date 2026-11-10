@@ -519,7 +519,20 @@ sourcekit-lsp, which understands SPM natively).
   the app can leave it — removed, dragged to another monitor, or the display
   picker switched — while this view and its state live on. Grids are
   materialised on first write (the steppers' binding), which is why an
-  untouched display stays out of the config. `ShortcutField` shows the current combo as text
+  untouched display stays out of the config.
+  Removing is the same gesture everywhere in it: ✕, Delete / Forward Delete
+  on the clicked tile or chip, or right-click. A tile leaves *this grid* (the
+  app drops back to the chips); a chip leaves *the workspace* (`removeApp`:
+  the list row and every grid's placement), since a chip is an app that isn't
+  on this grid and there's nothing else to take it off. Chips once had no way
+  out at all, which read as undeletable "drag" items. Delete is a local key
+  monitor (`DeleteKeyHandler`), not SwiftUI focus: on macOS 13 a plain view
+  only takes focus with Full Keyboard Access on. It stands aside while a text
+  field edits, for other windows and with modifiers held, and its action is
+  refreshed on every update so a reused view never deletes from the workspace
+  it was first built for. The app list's ✕ goes through `removeApp` too, and
+  `Workspace.init(from:)` prunes placements for apps no longer listed, which
+  older builds left behind. `ShortcutField` shows the current combo as text
   with Reassign (records via ShortcutRecorder) and clear buttons.
 - `KeyModificationsTab.swift` — the settings UI for the key-modification
   engine, in its own file because that feature already owns four others.

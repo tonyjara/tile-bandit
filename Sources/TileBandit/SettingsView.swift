@@ -310,7 +310,7 @@ struct WorkspaceDetail: View {
                 Text("Apps in this workspace")
                     .font(.headline)
 
-                AppListEditor(apps: $workspace.apps)
+                AppListEditor(apps: $workspace.apps, remove: { workspace.removeApp($0) })
                     .frame(height: 150)
 
                 Text("Tip: add the same app to several workspaces — it stays visible and keeps its position when you switch.")
@@ -419,6 +419,13 @@ struct WorkspaceDetail: View {
 /// more cells, ✕ removes it. An app placed on another display's grid shows up
 /// as a dimmed chip — dragging it here moves it to this monitor.
 ///
+/// Removing works the same on everything here: a tile's ✕ (or Delete, or
+/// right-click) takes it off this grid, and the app goes back to the chips;
+/// a chip's ✕ (or Delete once clicked, or right-click) takes the app out of
+/// the workspace, since a chip is an app that isn't on this grid and the
+/// workspace is the only thing left to remove it from. Chips had no way out
+/// at all, so a tile ✕'d off the grid sat there for good.
+///
 /// Placed apps also get a badge row above the grid. Tiles are allowed to
 /// overlap (two apps can share a cell, and a hand-edited config can stack them
 /// exactly), and the one drawn last takes every click — so picking an app by
@@ -440,6 +447,8 @@ struct GridLayoutEditor: View {
     /// Badge-picked app, raised above the other tiles. Read through
     /// `selection`, never directly — the app may have left this grid since.
     @State private var selectedApp: String?
+    /// Clicked chip, which Delete removes. Read through `chipSelection`.
+    @State private var selectedChip: String?
 
     struct TileInteraction {
         let bundleId: String
@@ -474,12 +483,57 @@ struct GridLayoutEditor: View {
         return selectedApp
     }
 
+    /// The clicked chip, forgotten once it's placed here or gone.
+    private var chipSelection: String? {
+        guard let selectedChip, availableApps.contains(where: { $0.bundleId == selectedChip }) else { return nil }
+        return selectedChip
+    }
+
     /// The other display an app is currently placed on, if any.
     private func placedElsewhere(_ bundleId: String) -> String? {
+        elsewhereGrid(bundleId)?.name
+    }
+
+    private func elsewhereGrid(_ bundleId: String) -> (key: String, name: String)? {
         guard let other = workspace.grids.first(where: {
             $0.displayKey != displayKey && $0.layout[bundleId] != nil
         }) else { return nil }
-        return displays.first { $0.key == other.displayKey }?.name ?? "another display"
+        return (other.displayKey, displays.first { $0.key == other.displayKey }?.name ?? "another display")
+    }
+
+    // MARK: Removing
+
+    /// Off this grid only; the app stays in the workspace, back among the chips.
+    private func removeFromGrid(_ bundleId: String) {
+        workspace.unplace(bundleId, on: displayKey)
+        if selectedApp == bundleId { selectedApp = nil }
+    }
+
+    /// Out of the workspace: the app list and every display's grid.
+    private func removeFromWorkspace(_ bundleId: String) {
+        workspace.removeApp(bundleId)
+        if selectedApp == bundleId { selectedApp = nil }
+        if selectedChip == bundleId { selectedChip = nil }
+    }
+
+    /// Delete / Forward Delete: the raised tile leaves the grid, else the
+    /// clicked chip leaves the workspace — each what its ✕ does.
+    private func deleteSelection() {
+        if let selection {
+            removeFromGrid(selection)
+        } else if let chipSelection {
+            removeFromWorkspace(chipSelection)
+        }
+    }
+
+    @ViewBuilder
+    private func removeMenu(for app: AppRef, onThisGrid: Bool) -> some View {
+        if onThisGrid {
+            Button("Remove from Grid") { removeFromGrid(app.bundleId) }
+        } else if let other = elsewhereGrid(app.bundleId) {
+            Button("Remove from \(other.name)'s Grid") { workspace.unplace(app.bundleId, on: other.key) }
+        }
+        Button("Remove \(app.name) from Workspace", role: .destructive) { removeFromWorkspace(app.bundleId) }
     }
 
     var body: some View {
@@ -527,10 +581,15 @@ struct GridLayoutEditor: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .background(DeleteKeyHandler(
+            isEnabled: selection != nil || chipSelection != nil,
+            action: deleteSelection
+        ).allowsHitTesting(false))
     }
 
     private func chip(for app: AppRef) -> some View {
         let elsewhere = placedElsewhere(app.bundleId)
+        let isSelected = chipSelection == app.bundleId
         return HStack(spacing: 4) {
             Circle()
                 .fill(color(for: app.bundleId))
@@ -542,13 +601,32 @@ struct GridLayoutEditor: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+            Button {
+                removeFromWorkspace(app.bundleId)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Remove \(app.name) from this workspace")
         }
-        .padding(.horizontal, 8)
+        .padding(.leading, 8)
+        .padding(.trailing, 5)
         .padding(.vertical, 3)
-        .background(Capsule().fill(Color.secondary.opacity(0.12)))
-        .overlay(Capsule().strokeBorder(Color.secondary.opacity(0.4)))
-        .opacity(elsewhere == nil ? 1 : 0.65)
-        .help(elsewhere.map { "Placed on \($0) — drag here to move it" } ?? app.bundleId)
+        .background(Capsule().fill(Color.secondary.opacity(isSelected ? 0.25 : 0.12)))
+        .overlay(Capsule().strokeBorder(
+            isSelected ? Color.accentColor : Color.secondary.opacity(0.4),
+            lineWidth: isSelected ? 1.5 : 1
+        ))
+        .opacity(elsewhere == nil || isSelected ? 1 : 0.65)
+        .contentShape(Capsule())
+        .help(elsewhere.map { "Placed on \($0) — drag here to move it" } ?? "Drag onto the grid to place it")
+        .onTapGesture {
+            selectedChip = isSelected ? nil : app.bundleId
+            selectedApp = nil
+        }
+        .contextMenu { removeMenu(for: app, onThisGrid: false) }
         .onDrag {
             draggedChip = app.bundleId
             return NSItemProvider(object: app.bundleId as NSString)
@@ -564,6 +642,7 @@ struct GridLayoutEditor: View {
         let region = grid.layout[app.bundleId]
         return Button {
             selectedApp = isSelected ? nil : app.bundleId
+            selectedChip = nil
         } label: {
             HStack(spacing: 4) {
                 Circle()
@@ -581,6 +660,7 @@ struct GridLayoutEditor: View {
         }
         .buttonStyle(.plain)
         .help(badgeHelp(app: app, region: region, isSelected: isSelected))
+        .contextMenu { removeMenu(for: app, onThisGrid: true) }
     }
 
     private func badgeHelp(app: AppRef, region: GridRegion?, isSelected: Bool) -> String {
@@ -602,7 +682,10 @@ struct GridLayoutEditor: View {
     }
 
     private var tileHint: String {
-        let base = "Drag a tile to move it, drag its corner dot to cover more cells, ✕ to remove."
+        var base = "Drag a tile to move it, drag its corner dot to cover more cells. ✕, Delete or right-click removes the tile or chip you clicked."
+        if !availableApps.isEmpty {
+            base += " A chip's ✕ takes the app out of this workspace."
+        }
         guard placedApps.count > 1 else { return base }
         return base + " Where tiles overlap, click an app above to bring its tile to the front."
     }
@@ -712,13 +795,14 @@ struct GridLayoutEditor: View {
             )
             .overlay(alignment: .topTrailing) {
                 Button {
-                    workspace.unplace(app.bundleId, on: displayKey)
+                    removeFromGrid(app.bundleId)
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .help("Remove from this grid")
                 .padding(2)
             }
             .overlay(alignment: .bottomTrailing) {
@@ -740,7 +824,11 @@ struct GridLayoutEditor: View {
             .gesture(moveGesture(app: app, cols: cols, rows: rows, canvasSize: canvasSize))
             // Simultaneous so it doesn't race the drag: a click that never
             // moves picks the tile, a click that moves still drags it.
-            .simultaneousGesture(TapGesture().onEnded { selectedApp = app.bundleId })
+            .simultaneousGesture(TapGesture().onEnded {
+                selectedApp = app.bundleId
+                selectedChip = nil
+            })
+            .contextMenu { removeMenu(for: app, onThisGrid: true) }
     }
 
     /// Grab anywhere in the tile: it follows in whole-cell steps, span preserved.
@@ -849,6 +937,67 @@ private struct GridDropDelegate: DropDelegate {
     }
 }
 
+/// Delete and Forward Delete for the grid editor, while something in it is
+/// selected. A local key monitor rather than SwiftUI focus: on macOS 13 a
+/// plain view only takes focus with Full Keyboard Access on, so a clicked
+/// tile would never hear the key. It stands aside while a text field is
+/// being edited (the field editor is first responder), for any other window,
+/// and with a modifier held. The action is refreshed on every update, so it
+/// always acts on the workspace currently shown, not the one it was made for.
+private struct DeleteKeyHandler: NSViewRepresentable {
+    var isEnabled: Bool
+    var action: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.view = view
+        context.coordinator.install()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.isEnabled = isEnabled
+        context.coordinator.action = action
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.uninstall()
+    }
+
+    final class Coordinator {
+        weak var view: NSView?
+        var isEnabled = false
+        var action: () -> Void = {}
+        private var monitor: Any?
+
+        /// kVK_Delete and kVK_ForwardDelete.
+        private static let deleteKeys: Set<UInt16> = [51, 117]
+
+        func install() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, self.isEnabled,
+                      let window = self.view?.window, event.window === window, window.isKeyWindow,
+                      Self.deleteKeys.contains(event.keyCode),
+                      event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+                      !(window.firstResponder is NSText)
+                else { return event }
+                self.action()
+                return nil
+            }
+        }
+
+        func uninstall() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
+
+        deinit { uninstall() }
+    }
+}
+
 // MARK: - Shortcut field
 
 /// Shows the current combo as text; "Reassign" records the next key press
@@ -890,6 +1039,9 @@ struct ShortcutField: View {
 
 struct AppListEditor: View {
     @Binding var apps: [AppRef]
+    /// How a row's ✕ removes it. A workspace passes its own `removeApp`, so the
+    /// app's tiles leave every grid with it; floating apps just drop the row.
+    var remove: ((String) -> Void)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -903,7 +1055,11 @@ struct AppListEditor: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Button {
-                            apps.removeAll { $0.bundleId == app.bundleId }
+                            if let remove {
+                                remove(app.bundleId)
+                            } else {
+                                apps.removeAll { $0.bundleId == app.bundleId }
+                            }
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                         }

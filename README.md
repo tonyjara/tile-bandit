@@ -162,6 +162,10 @@ cells, ✕ to take it off. An app placed on another monitor's grid shows up as a
 dimmed chip labelled with that display — drag it over and it *moves* there. An
 app lives on one display at a time.
 
+To remove something, click it and press Delete, use its ✕, or right-click it.
+A tile comes off the grid and goes back to the chips; a chip (an app not on
+this grid) is taken out of the workspace.
+
 **Apply Grid Layout** (`⌥L`) then moves each placed app's windows to the
 display it's assigned to and sizes them to their cells. This is the only thing
 that moves a window between screens, and it only runs when you ask.
