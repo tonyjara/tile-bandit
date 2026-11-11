@@ -27,10 +27,15 @@ Tile Bandit treats **workspaces as groups of apps**. Switching to one:
 
 1. unhides the apps that belong to it,
 2. hides every other app (floating apps excepted),
-3. focuses whatever you were last in there.
+3. puts it back the way you left it: the same app in front, and its windows in
+   the same order.
 
 **Windows never move during a switch.** An app in two workspaces — your
 browser, your terminal — stays exactly where it is when you flip between them.
+Each workspace remembers its own order, so the browser can be in front in one
+and behind the editor in the other; using it in one never changes the other.
+With the Accessibility permission that memory is per window (one browser window
+on top here, another there); without it, per app.
 Window *tiling* exists too, but only ever when you ask for it.
 
 Workspaces are grouped by **display profile**: the laptop on its own, the
@@ -345,7 +350,9 @@ Sources/TileBandit/
 ├── Models.swift             Config / DisplayProfile / Workspace / Shortcut (Codable)
 ├── ConfigStore.swift        ObservableObject + debounced JSON autosave
 ├── DisplayProfiles.swift    display fingerprinting + profile detection
-├── WorkspaceEngine.swift    the actual switching: unhide → hide → focus
+├── WorkspaceEngine.swift    the actual switching: unhide → hide → restore, then check
+├── WindowStack.swift        what is on screen, what a workspace remembers
+├── Log.swift                the trace in the system log
 ├── LayoutEngine.swift       AX window moving + maximize
 ├── SnapManager.swift        modifier-drag snap-to-grid + overlay
 ├── HotkeyManager.swift      Carbon RegisterEventHotKey wrapper
@@ -358,6 +365,26 @@ Sources/TileBandit/
 ├── KeyCapture.swift         captures one key for Add Mapping, remaps paused
 ├── SettingsView.swift       SwiftUI settings window
 └── KeyModificationsTab.swift  … and its biggest tab
+```
+
+`swift test` runs the tests of the switch decisions.
+
+### When a switch goes wrong
+
+Every switch leaves a few lines in the system log: what asked for it, what was
+in front, what was focused and why, and what was actually on screen a moment
+later. An app that was asked to hide and didn't is named there as `LEFTOVER`.
+
+```sh
+make log                 # the last hour
+SINCE=1d make log        # further back
+make log-live            # follow it while you switch
+```
+
+Without the checkout:
+
+```sh
+/usr/bin/log show --last 1h --info --predicate 'subsystem == "com.twonary.TileBandit"'
 ```
 
 ## Roadmap

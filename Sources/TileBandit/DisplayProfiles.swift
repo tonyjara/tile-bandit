@@ -38,6 +38,18 @@ enum DisplayIdentity {
 
     static let builtInKey = "builtin"
 
+    /// The stand-in macOS reports when no real display is available — lid
+    /// closed and the monitor asleep or unplugged. Its vendor and model numbers
+    /// are the four-character codes 'unkn' and 'virt'. It is not a setup anyone
+    /// sits at, so `resolve()` treats a snapshot made only of these the way it
+    /// treats an empty one. (An AirPlay or Sidecar display has its own vendor
+    /// code and is a real setup.)
+    static let placeholderKeyPrefix = "edid:\(0x756E_6B6E)-\(0x7669_7274)-"
+
+    static func isPlaceholder(key: String) -> Bool {
+        key.hasPrefix(placeholderKeyPrefix)
+    }
+
     /// The attached displays as a fingerprint.
     ///
     /// Sorted by key so rearranging displays in System Settings — or macOS
@@ -165,6 +177,13 @@ final class DisplayProfileManager {
         // Zero screens means asleep or mid-reconfiguration, not "a new setup
         // with no displays" — hold on to whatever profile is active.
         guard !displays.isEmpty else { return }
+        // Nor is the stand-in display a setup. Taking it for one used to file
+        // a nameless profile for it and switch workspaces — hiding and showing
+        // apps — while the screen was off, and again on every wake.
+        guard !displays.allSatisfy({ DisplayIdentity.isPlaceholder(key: $0.key) }) else {
+            Log.display.line("only the placeholder display is attached (lid closed, no monitor): keeping the current setup")
+            return
+        }
         let keys = Set(displays.map(\.key))
 
         let id: UUID
@@ -209,6 +228,8 @@ final class DisplayProfileManager {
 
         guard store.activeProfileID != id else { return }
         store.activeProfileID = id
+        let name = store.activeProfile?.name ?? "?"
+        Log.display.line("setup is now \"\(name)\" for displays \(displays.map(\.key).joined(separator: ", "))")
         onActiveProfileChange?(id)
     }
 
@@ -217,6 +238,7 @@ final class DisplayProfileManager {
     func activate(_ id: UUID) {
         guard store.config.profiles.contains(where: { $0.id == id }), store.activeProfileID != id else { return }
         store.activeProfileID = id
+        Log.display.line("setup switched by hand to \"\(store.activeProfile?.name ?? "?")\"")
         onActiveProfileChange?(id)
     }
 

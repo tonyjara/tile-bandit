@@ -6,7 +6,48 @@ the Homebrew cask points at.
 
 ## Unreleased
 
+### Changed
+
+- **A workspace comes back the way you left it.** The same app in front and
+  its windows in the same order, front to back, instead of only the last
+  focused app. Each workspace keeps its own order, so an app in two workspaces
+  can be in front in one and behind another window in the other. With the
+  Accessibility permission the order is kept per window (a shared app can have
+  one window on top here and another there); without it, per app.
+- A floating app that was in front when you left a workspace is in front when
+  you come back. It used to be skipped in favour of the workspace's own app.
+- When an app that is in several workspaces comes to the front, the workspace
+  follows to the one used most recently, not the first in the config.
+- Accessibility calls wait at most a second on an app that doesn't answer, down
+  from the system's several. A frozen app can no longer hold up the hotkeys.
+
+### Added
+
+- **A log of every switch.** What asked for it, what was in front, what was
+  focused and why, and what was on screen a moment later. `make log`, or
+  `/usr/bin/log show --last 1h --info --predicate 'subsystem == "com.twonary.TileBandit"'`.
+  Shortcuts that fail to register and Accessibility calls that fail are in it
+  too; both used to fail silently.
+
 ### Fixed
+
+- **A switch that changed nothing.** With an app in two workspaces, using it in
+  both made it the remembered focus of both, so switching between them brought
+  forward the window that was already in front. What a workspace remembers is
+  now read from the screen at the moment you leave it, and using a shared app
+  in one workspace can no longer change what another remembers.
+- **Windows of the workspace you left staying up.** An app that is busy hides
+  only when it gets round to it, and nothing used to look afterwards. The
+  screen is now checked after every switch, and an app still showing a window
+  is asked again, for up to twelve seconds.
+- **A switch undone a moment later.** Bringing an app forward and pressing a
+  workspace shortcut within a fifth of a second could send you straight back.
+- **Windowed programs started from a terminal** (no app bundle) were never
+  hidden by a switch.
+- **Lid closed, no monitor.** The stand-in display macOS reports then was taken
+  for a new display setup: a nameless profile was created and workspaces were
+  switched with the screen off. It is now ignored. A profile with an empty name
+  left over from this can be deleted in Settings → Displays.
 
 - **The app chips under "Drag onto the grid" can be removed.** Taking a tile
   off the grid sent its app back to that row, where nothing could delete it.

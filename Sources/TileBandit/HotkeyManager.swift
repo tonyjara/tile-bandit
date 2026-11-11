@@ -31,7 +31,7 @@ final class HotkeyManager {
                 eventKind: UInt32(kEventHotKeyReleased)
             ),
         ]
-        InstallEventHandler(
+        let installed = InstallEventHandler(
             GetApplicationEventTarget(),
             { _, event, userData in
                 guard let event, let userData else { return noErr }
@@ -58,6 +58,10 @@ final class HotkeyManager {
             Unmanaged.passUnretained(self).toOpaque(),
             &eventHandler
         )
+        if installed != noErr {
+            // Without the handler every hotkey registers and none of them fires.
+            Log.hotkey.failure("could not install the hotkey handler (status \(installed)): no shortcut will work")
+        }
     }
 
     func unregisterAll() {
@@ -67,7 +71,10 @@ final class HotkeyManager {
     }
 
     /// Returns false for unknown keys or shortcuts without any modifier
-    /// (a bare key would swallow normal typing system-wide).
+    /// (a bare key would swallow normal typing system-wide). Callers don't
+    /// check — there is nothing they could do — so every refusal is said in
+    /// the log here, with the reason: a shortcut that silently does nothing is
+    /// indistinguishable from a switch that failed.
     @discardableResult
     func register(_ shortcut: Shortcut, handler: @escaping () -> Void) -> Bool {
         register(shortcut, pressed: handler, released: nil)
@@ -76,14 +83,20 @@ final class HotkeyManager {
     /// Hold-style variant: `released` fires when the combo is let go.
     @discardableResult
     func register(_ shortcut: Shortcut, pressed: @escaping () -> Void, released: (() -> Void)?) -> Bool {
-        guard let keyCode = Self.keyCodes[shortcut.key.lowercased()] else { return false }
+        guard let keyCode = Self.keyCodes[shortcut.key.lowercased()] else {
+            Log.hotkey.failure("\(shortcut.display) not registered: \"\(shortcut.key)\" is not a key a shortcut can use")
+            return false
+        }
 
         var modifiers: UInt32 = 0
         if shortcut.control { modifiers |= UInt32(controlKey) }
         if shortcut.option { modifiers |= UInt32(optionKey) }
         if shortcut.shift { modifiers |= UInt32(shiftKey) }
         if shortcut.command { modifiers |= UInt32(cmdKey) }
-        guard modifiers != 0 else { return false }
+        guard modifiers != 0 else {
+            Log.hotkey.failure("\(shortcut.display) not registered: a shortcut needs at least one modifier")
+            return false
+        }
 
         let id = nextID
         nextID += 1
@@ -97,7 +110,15 @@ final class HotkeyManager {
             0,
             &ref
         )
-        guard status == noErr, let ref else { return false }
+        guard status == noErr, let ref else {
+            // -9878 (eventHotKeyExistsErr) is the usual one: the combination
+            // is taken, by another action of ours or by another app.
+            let reason = status == OSStatus(eventHotKeyExistsErr)
+                ? "the combination is already taken (by another Tile Bandit action or another app)"
+                : "status \(status)"
+            Log.hotkey.failure("\(shortcut.display) not registered: \(reason)")
+            return false
+        }
 
         registered.append(ref)
         handlers[id] = Handlers(pressed: pressed, released: released)

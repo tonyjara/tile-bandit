@@ -107,6 +107,89 @@ enum AX {
         return window
     }
 
+    // MARK: - Setup
+
+    /// How long one Accessibility call may wait on an app. The system default
+    /// is several seconds, and every call here is on the main thread: a frozen
+    /// app under the cursor, or in the workspace being switched to, would hold
+    /// up every hotkey behind it. Set on the system-wide element, which is how
+    /// the limit is set for the whole process.
+    static let messagingTimeout: Float = 1.0
+
+    static func prepare() {
+        AXUIElementSetMessagingTimeout(systemWide, messagingTimeout)
+    }
+
+    // MARK: - Window identity and order (for restoring a workspace's stack)
+
+    /// An app's windows by window-server id, or nil when the app didn't answer
+    /// (busy, or gone) — the caller skips it for now rather than waiting on it
+    /// once per window.
+    ///
+    /// The id comes from `_AXUIElementGetWindow`, which AppKit has carried for
+    /// well over a decade but never declared. It is looked up by name at run
+    /// time, so if a future macOS drops it nothing fails to launch: the
+    /// fallback matches a window to its id by frame, which only falls short
+    /// for two windows of one app with identical frames.
+    static func windowsByID(pid: pid_t, among candidates: [WindowRef]) -> [CGWindowID: AXUIElement]? {
+        let app = AXUIElementCreateApplication(pid)
+        let (value, error) = copy(app, kAXWindowsAttribute)
+        guard error == .success, let list = value as? [AXUIElement] else {
+            return error == .noValue ? [:] : nil
+        }
+        let own = candidates.filter { $0.pid == pid }
+        var byID: [CGWindowID: AXUIElement] = [:]
+        for window in list {
+            if let id = windowID(of: window) {
+                byID[id] = window
+            } else if let frame = axFrame(of: window) {
+                let matches = own.filter { byID[$0.id] == nil && sameFrame($0.bounds, frame) }
+                if matches.count == 1 { byID[matches[0].id] = window }
+            }
+        }
+        return byID
+    }
+
+    /// Brings one window to the front of the stack without making its app
+    /// active.
+    @discardableResult
+    static func raise(_ window: AXUIElement) -> Bool {
+        let error = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+        report(error, "raise", on: window)
+        return error == .success
+    }
+
+    /// Makes `window` its app's main window — the one a plain `activate()`
+    /// brings forward.
+    @discardableResult
+    static func makeMain(_ window: AXUIElement) -> Bool {
+        let error = AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+        report(error, "set AXMain", on: window)
+        return error == .success
+    }
+
+    private typealias WindowIDGetter = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
+
+    private static let windowIDGetter: WindowIDGetter? = {
+        // RTLD_DEFAULT: search everything already loaded.
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_AXUIElementGetWindow") else {
+            Log.ax.line("_AXUIElementGetWindow is not available; matching windows by frame instead")
+            return nil
+        }
+        return unsafeBitCast(symbol, to: WindowIDGetter.self)
+    }()
+
+    private static func windowID(of window: AXUIElement) -> CGWindowID? {
+        guard let getter = windowIDGetter else { return nil }
+        var id = CGWindowID(0)
+        return getter(window, &id) == .success && id != 0 ? id : nil
+    }
+
+    private static func sameFrame(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.minX - b.minX) < 2 && abs(a.minY - b.minY) < 2
+            && abs(a.width - b.width) < 2 && abs(a.height - b.height) < 2
+    }
+
     // MARK: - Coordinate spaces
 
     private static var primaryScreenHeight: CGFloat {
@@ -145,9 +228,55 @@ enum AX {
     }
 
     private static func copyValue(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
+        copy(element, attribute).value
+    }
+
+    /// The value and what the call said, for the callers that need to tell
+    /// "this app has no such thing" from "this app didn't answer".
+    private static func copy(_ element: AXUIElement, _ attribute: String) -> (value: CFTypeRef?, error: AXError) {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
-        return value
+        let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        report(error, "read \(attribute)", on: element)
+        return (error == .success ? value : nil, error)
+    }
+
+    // MARK: - Errors
+
+    /// Says a failed call in the log. Every Accessibility call here used to
+    /// drop its result, so a window that would not move, or an app too busy to
+    /// answer, left nothing behind.
+    ///
+    /// Two results are ordinary and stay out of it: an attribute the element
+    /// doesn't have, and one with no value. The rest is limited to one line per
+    /// kind every few seconds, because the drag monitor asks on every mouse
+    /// move and a frozen app would otherwise write hundreds.
+    private static func report(_ error: AXError, _ what: String, on element: AXUIElement) {
+        guard error != .success, error != .noValue, error != .attributeUnsupported else { return }
+        var pid: pid_t = 0
+        AXUIElementGetPid(element, &pid)
+        let key = "\(what) \(error.rawValue) \(pid)"
+        let now = CFAbsoluteTimeGetCurrent()
+        if let last = lastReported[key], now - last < 5 { return }
+        lastReported[key] = now
+        if lastReported.count > 200 { lastReported = lastReported.filter { now - $0.value < 5 } }
+        let app = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "pid \(pid)"
+        Log.ax.failure("\(what) failed on \(app): \(name(of: error))")
+    }
+
+    /// Main thread only, like every caller of these helpers.
+    private static var lastReported: [String: CFAbsoluteTime] = [:]
+
+    private static func name(of error: AXError) -> String {
+        switch error {
+        case .apiDisabled: return "Accessibility is not granted (apiDisabled)"
+        case .cannotComplete: return "the app did not answer in time (cannotComplete)"
+        case .invalidUIElement: return "the window is gone (invalidUIElement)"
+        case .illegalArgument: return "illegalArgument"
+        case .actionUnsupported: return "actionUnsupported"
+        case .notImplemented: return "notImplemented"
+        case .failure: return "failure"
+        default: return "AXError \(error.rawValue)"
+        }
     }
 
     private static func string(_ element: AXUIElement, _ attribute: String) -> String? {
@@ -175,13 +304,13 @@ enum AX {
     private static func set(_ element: AXUIElement, _ attribute: String, point: CGPoint) {
         var value = point
         guard let axValue = AXValueCreate(.cgPoint, &value) else { return }
-        AXUIElementSetAttributeValue(element, attribute as CFString, axValue)
+        report(AXUIElementSetAttributeValue(element, attribute as CFString, axValue), "set \(attribute)", on: element)
     }
 
     private static func set(_ element: AXUIElement, _ attribute: String, size: CGSize) {
         var value = size
         guard let axValue = AXValueCreate(.cgSize, &value) else { return }
-        AXUIElementSetAttributeValue(element, attribute as CFString, axValue)
+        report(AXUIElementSetAttributeValue(element, attribute as CFString, axValue), "set \(attribute)", on: element)
     }
 
     private static func area(_ rect: CGRect) -> CGFloat {

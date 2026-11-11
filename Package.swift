@@ -8,6 +8,9 @@ let package = Package(
         .executable(name: "TileBandit", targets: ["TileBandit"])
     ],
     targets: [
-        .executableTarget(name: "TileBandit")
+        .executableTarget(name: "TileBandit"),
+        // The decisions of a switch that need no screen: what a workspace
+        // remembers and which windows move to put its stack back. `swift test`.
+        .testTarget(name: "TileBanditTests", dependencies: ["TileBandit"]),
     ]
 )

@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        AX.prepare()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.imagePosition = .imageLeading
@@ -339,7 +340,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: StatusMenuActions {
     @objc func menuSwitchWorkspace(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? UUID else { return }
-        engine.switchTo(id)
+        engine.switchTo(id, trigger: .menu)
     }
 
     @objc func menuActivateProfile(_ sender: NSMenuItem) {

@@ -6,6 +6,32 @@ on macOS 27.2. File and line numbers are as of that commit, before any fix.
 App and workspace names are generic stand-ins: "the browser" is the app that
 sat in several workspaces, "Chat", "Code" and "Web" the three workspaces.
 
+## Status
+
+The owner read the audit and decided (see "Decisions" at the end). What was
+then built, all in the release after 1.5.0:
+
+| Finding | Outcome |
+|---|---|
+| 1. Focus goes to the app already in front | Fixed. A workspace's memory is taken from the screen when it is left, and nothing else writes it. |
+| 2. The rest of the stack comes back out of order | Fixed. The whole stack is put back, by window with the Accessibility grant, by app without. |
+| 3. A hide that didn't take is never noticed | Fixed. The screen is read back after each switch and slow or deaf apps are asked again. |
+| 4. Follow-focus can undo a switch | The race is closed. An app that brings itself forward still moves the workspace, by decision. |
+| 5. Apps with no bundle identifier are never hidden | Fixed. |
+| 6. Full screen and Spaces | Not fixed. The new log names the app when it happens. |
+| 7. The placeholder display | Fixed: it is no longer taken for a setup. Wake is otherwise unchanged. |
+| 8. Relaunch and quit | Unchanged. |
+| 9. Failures that leave no trace | Hotkey registrations and Accessibility errors are logged, and Accessibility calls have a one-second limit. |
+
+The log proposed under "Logging to add" exists: `make log`, or
+`/usr/bin/log show --last 1h --info --predicate 'subsystem == "com.twonary.TileBandit"'`.
+
+Not run against real windows before release: the engine cannot be started
+without hiding every app on the machine it is tested on, and the audit's shell
+had no Accessibility grant. The decisions are covered by `swift test`; the
+window-by-window restore was first exercised on the owner's own switches, with
+the log as the record.
+
 ## Summary
 
 The reported symptom was captured on the owner's own switches and has one

@@ -6,7 +6,12 @@ natively, so any editor that speaks it works).
 
 ## Commands
 
-- `swift build` / `swift run` — dev
+- `swift build` / `swift run` — dev. `swift run` starts a second Tile Bandit:
+  quit the installed one first, or both register the same hotkeys and both
+  hide apps.
+- `swift test` (`make test`) — the switch decisions that need no screen
+- `make log` / `make log-live` — what the switcher did and why, from the
+  system log (`SINCE=3h make log` for further back); see Log.swift
 - `make app` — release bundle at `dist/Tile Bandit.app` (ad-hoc signed)
 - `make notarized CODESIGN_ID="Developer ID Application: … (TEAMID)"` — signed,
   notarised, stapled zip for the Homebrew cask; prints the sha256 to paste into
@@ -200,6 +205,10 @@ natively, so any editor that speaks it works).
   else adopt a *lone* unbound profile (the migration carrier — deliberately
   only when it's the only one, so a duplicate is never silently claimed), else
   create one cloning the profile you were just on (fresh workspace ids).
+  A snapshot made only of the placeholder display (`isPlaceholder(key:)`: the
+  stand-in macOS reports with the lid closed and no monitor, vendor `unkn`,
+  model `virt`) is treated like an empty one — it used to be filed as a
+  nameless setup and switched to with the screen off.
   All permission-free. `screensByKey()`/`storedKey(for:)` are the reverse
   lookup — how a stored `DisplayGrid` finds the monitor it was drawn for, using
   the same "#n" suffixing as `snapshot()`.
@@ -214,55 +223,127 @@ natively, so any editor that speaks it works).
   index-based binding traps when a profile is deleted or a reload swaps the
   array under a live view).
 - `WorkspaceEngine.swift` — switching = unhide target apps → hide everything
-  else (floating apps excepted) → activate the workspace's last-focused app
-  (tracked in-memory via `didActivateApplicationNotification`; falls back to
-  the first app). Both the hide and the unhide are issued *unconditionally*,
+  else (floating apps excepted) → put the workspace back **as it was left**:
+  the same app in front and its windows in the same order, front to back.
+  Both the hide and the unhide are issued *unconditionally*,
   never gated on `NSRunningApplication.isHidden`: that property is a cache
   AppKit refreshes asynchronously, so an app the user brought back by a route
   we never hear about (a notification banner, the Dock, Mission Control) can
   still read `isHidden == true` and get skipped — it then sits over the grid
   through switch after switch. Redundant hide/unhide calls are no-ops.
+  **What a workspace remembers is read off the screen when it is left**
+  (`remember(_:)`, a `WorkspaceSnapshot`: window ids front to back plus the
+  app in front), and that is the only place a snapshot is written. It used to
+  be collected from activation notifications and keyed by whichever workspace
+  was active when the notification *arrived* — 40–55 ms after the fact — so an
+  app in two workspaces became the remembered focus of both, and a switch then
+  "focused" the window that was already in front and changed nothing
+  (docs/audit/workspace-switch.md, finding 1). Don't reintroduce a second
+  writer. A workspace left within `settleTime` of arriving isn't remembered
+  again, since a half-restored screen would overwrite the good memory. A
+  floating app can be the remembered focus: it was in front, and it is still
+  there on the way back.
+  **Nothing a switch asks for is taken on trust.** Hiding is done by each app
+  on its own main thread (a blocked helper took 3.7 s where an idle one takes
+  44 ms), and `hide()` returns false even when it works, so its result means
+  nothing. `runPass` reads the screen back (`WindowList`, permission-free)
+  0.1, 0.4 and 1.2 s after a switch: apps that were asked to hide and still
+  draw a window are asked again and logged as `LEFTOVER`, member apps still
+  hidden are asked to show again, and while either remains it looks again at
+  3, 6 and 12 s before saying it gave up. Only processes asked at the switch
+  are ever asked again — an app opened afterwards is the user's — and the app
+  in front is left alone when the switch moved focus elsewhere, since it can
+  only have been brought back since. Apps with no bundle identifier (anything
+  windowed started from a terminal) are hidden like any other; they used to be
+  skipped.
+  **The order** is restored in the first pass, once the apps are back, moving
+  as few windows as it takes (`StackPlan.raisesNeeded`; usually none, since
+  apps hidden together return in the order they left). With the Accessibility
+  grant it works window by window through `AX.raise` — so a shared app can
+  have one window on top in one workspace and another in the next — and a
+  second attempt at 0.4 s goes the long way (make the window main, activate
+  its app) for apps a plain raise doesn't move; the third pass only reports.
+  Without the grant it works app by app, by activating them. Never ask for the
+  grant from here: a switch must not put up a permission prompt. Once the
+  order is right it is left alone, so a window clicked just after a switch
+  isn't pulled back. Windows the snapshot doesn't know (opened since) go
+  *under* the ones it does.
   `switchToNext()`/`switchToPrevious()` cycle in config order
   with wrap-around (default hotkeys ⌥P = next, ⌥N = previous — per owner's
   explicit request, note it's inverted from the emacs n/p convention).
   **Switching never moves windows** — that invariant is why
   apps shared between workspaces keep their position; grid tiling deliberately
   moves windows but only from explicit user actions in LayoutEngine/SnapManager,
-  never as part of a switch. Operates on the live profile's workspaces;
+  never as part of a switch. (Restoring the order changes which window is in
+  front of which, never where one is.) Operates on the live profile's workspaces;
   `adoptProfile(_:)` is how a display change swaps which set that is — it lands
   on the workspace last used in that profile, else the same-named workspace as
   the one just left (new profiles are clones, so "Code" on the laptop lines up
   with "Code" at the desk), else nothing at all, leaving windows alone. That
-  memory is in-memory only, like `lastFocusedApp`.
+  memory is in-memory only, like the snapshots.
   Focus can also drive a switch (config `followFocusedApp`, default on):
   every activation restarts a 0.2s timer, and `followFocus` then switches to
   the workspace owning whatever is *frontmost at that point* — Cmd-Tab /
   Spotlight / a Dock click unhide the app anyway, so the workspace comes along
-  rather than one window sitting stranded over the current one. Deciding on
-  the settled frontmost app instead of on the notification is what makes it
-  reliable: hiding apps hands focus around, so a switch arrives as a burst of
-  activations (coalesced into one check, which then sees our own focusApp's
-  app and does nothing), and an app unhidden by Cmd-Tab can still report
-  `isHidden` at the moment it activates. Floating apps never pull you away.
+  rather than one window sitting stranded over the current one. An app that
+  brings *itself* forward is followed the same way, by the owner's decision.
+  Deciding on the settled frontmost app instead of on the notification is what
+  makes it reliable: hiding apps hands focus around, so a switch arrives as a
+  burst of activations (coalesced into one check, which then sees our own
+  focus app and does nothing), and an app unhidden by Cmd-Tab can still report
+  `isHidden` at the moment it activates. `switchTo` cancels a pending check,
+  and a check remembers the switch count it was armed under and waits again
+  if a switch happened meanwhile: one armed just before a hotkey would
+  otherwise judge the new workspace by the app that was in front before, and
+  switch straight back. Floating apps never pull you away. An app in several
+  workspaces pulls to the one used most recently, not the first in the config.
   With no active workspace (fresh launch, or a profile adoption that landed
   nowhere) follow-focus only fires when the app is in exactly one workspace —
   in several it's ambiguous, so it stays put instead of picking config order.
-  The app is written into `lastFocusedApp` before switching so focus lands
-  on what the user reached for, not on that workspace's previous focus.
+  The app that pulled is handed to `switchTo` (`bringing:`) and stays in
+  front, ahead of whatever that workspace remembers: it is what the user
+  reached for.
   `hideUnassignedApps()` is the cleanup action (default hotkey ⌥0, menu item,
   and runs at launch): hides everything outside the active workspace, or outside
   all of the live profile's workspaces when none is active — "assigned" means
   assigned in the setup you're plugged into. No-op when the profile has no
   workspaces, so a fresh install (or a just-created profile) doesn't blank the
-  screen.
+  screen. It gets the same checks afterwards as a switch.
+- `WindowStack.swift` — the screen as the window server lists it and the
+  arithmetic on it. `WindowList.onScreen()` is `CGWindowListCopyWindowInfo`
+  cut down to ordinary windows, front to back; it needs no permission (only
+  window *titles* wait on Screen Recording) and never prompts, and it is the
+  ground truth a switch is checked against. `WorkspaceSnapshot` is what a
+  workspace remembers. `StackPlan` is pure and generic — it runs on window ids
+  with Accessibility and on pids without — and is what
+  `Tests/TileBanditTests` covers, because the engine itself can't be run in a
+  test without hiding the developer's own apps.
+- `Log.swift` — the trace. Everything goes to the system log under the
+  subsystem `com.twonary.TileBandit` (a fixed string: a `swift run` build has
+  no bundle identifier), in categories `switch`, `follow`, `display`, `hotkey`
+  and `ax`. `line` is `notice`, which macOS keeps on disk for days: one line
+  per switch (what asked for it, from and to, what was in front, what was
+  focused and why) and one per check (what is in front, the windows front to
+  back, what was done about the order, `LEFTOVER`). `quiet` is `info`, memory
+  only: the follow-focus checks that decided nothing, which fire on every
+  Cmd-Tab. Interpolations are marked public on purpose — it's the user's own
+  log, and `<private> → <private>` explains nothing. Read it with `make log`
+  (`/usr/bin/log`, spelled out because zsh has a builtin of the same name).
 - `LayoutEngine.swift` — the AX-based tiling (the one part needing the
   Accessibility permission): `AccessibilityPermission` + `AX` helpers
   (AXUIElement window enumeration, frame get/set, top-left↔bottom-left
-  coordinate flip) and `LayoutEngine.apply(workspace)`, which **moves** each
+  coordinate flip; `prepare()` caps every call at one second, since they all
+  run on the main thread and the system default would let one frozen app hold
+  up every hotkey for several; failed calls are logged, throttled, where they
+  used to be dropped) and `LayoutEngine.apply(workspace)`, which **moves** each
   laid-out app's standard windows to the display it's placed on and sizes them
   to their `GridRegion` there. This is the only thing that moves a window
   between screens; it runs only from the Apply Grid Layout hotkey (default ⌥L)
-  or menu item. `target(for:placements:screens:)` picks the display: the one
+  or menu item. `AX` also carries what a switch uses to restore a
+  workspace's order when the grant is there: `windowsByID` (window-server id →
+  AX element, through `_AXUIElementGetWindow` looked up by name at run time so
+  its absence can't stop a launch, with a match by frame as the fallback),
+  `raise` and `makeMain`. `target(for:placements:screens:)` picks the display: the one
   the window is already on if the app is placed there (only happens with an
   app on several grids), else the first placement whose display is attached,
   else — nothing attached matches, e.g. a profile forced from the menu for a
@@ -301,7 +382,10 @@ natively, so any editor that speaks it works).
   Handles `kEventHotKeyReleased` too: `register(_:pressed:released:)` is the
   hold-style variant (MaximizeHold uses it); Carbon fires released when the
   combo breaks whichever of the key or modifier goes up first.
-  Refuses shortcuts without modifiers. `keyCodes` is the whole supported key
+  Refuses shortcuts without modifiers. Every refusal — an unknown key, no
+  modifier, a combination macOS says is taken — is logged with its reason,
+  because callers don't check the result and a shortcut that does nothing
+  looks exactly like a switch that failed. `keyCodes` is the whole supported key
   set — 0-9, a-z plus common punctuation (`,` is there so ⌥, can be the
   Settings shortcut, matching the macOS convention); KeyDebugger's verdict and
   ShortcutRecorder's accepted keys both derive from it.
@@ -585,7 +669,9 @@ natively, so any editor that speaks it works).
   secure input, which is the price of it.
 - Tiling (LayoutEngine/SnapManager's AX calls) and dual-role keys
   (DualRoleTap) need the Accessibility permission; everything else must stay
-  permission-free. TCC ties the grant to
+  permission-free. A workspace switch *uses* the grant when it is there (to
+  restore the order window by window) and must work without it, and never
+  asks for it. TCC ties the grant to
   the code signature: ad-hoc re-signing (`make app`) resets it on every
   rebuild — pass `CODESIGN_ID="Apple Development: … (TEAMID)"` for a stable
   grant. For dev, processes launched from a terminal are TCC-attributed to the

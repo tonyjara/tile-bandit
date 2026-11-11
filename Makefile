@@ -18,7 +18,11 @@ ZIP = dist/TileBandit-$(VERSION).zip
 ICONSET = .build/AppIcon.iconset
 GLYPH_SHEET = .build/glyphs.png
 
-.PHONY: run dev build release app notarized check-identity icon glyphs clean
+# How far back `make log` reads: 30m, 3h, 2d.
+SINCE ?= 1h
+LOG_PREDICATE = subsystem == "com.twonary.TileBandit"
+
+.PHONY: run dev build test log log-live release app notarized check-identity icon glyphs clean
 
 run:
 	swift run
@@ -29,6 +33,17 @@ dev:
 
 build:
 	swift build
+
+test:
+	swift test
+
+# What the switcher did and why (Log.swift). /usr/bin/log by its path: zsh has
+# a builtin called log.
+log:
+	@/usr/bin/log show --last $(SINCE) --info --style compact --predicate '$(LOG_PREDICATE)'
+
+log-live:
+	@/usr/bin/log stream --info --style compact --predicate '$(LOG_PREDICATE)'
 
 release:
 	swift build -c release
