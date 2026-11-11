@@ -189,7 +189,7 @@ struct SnapSettings: Codable, Equatable {
 /// One display's slice of a workspace: how that screen is divided and which
 /// apps sit in which of its cells. A workspace holds one per display in its
 /// profile — that's what lets a single workspace say "editor and terminal side
-/// by side on the big monitor, Slack filling the laptop".
+/// by side on the big monitor, chat filling the laptop".
 struct DisplayGrid: Codable, Equatable, Hashable, Identifiable {
     /// The `DisplayRef.key` this grid belongs to. Empty means *unbound*: a grid
     /// from a config written before grids were per-display, or one in a profile
@@ -393,7 +393,7 @@ struct Workspace: Codable, Equatable, Hashable, Identifiable {
 /// Deliberately *not* the CGDirectDisplayID: those are handed out per session
 /// and change when you replug a monitor. The built-in panel is just "builtin";
 /// externals use their EDID vendor/model/serial (serial reads 0 on plenty of
-/// monitors, vendor+model still separates a Dell from a Studio Display); a
+/// monitors, vendor+model still separates one maker's panel from another's); a
 /// display reporting none of those falls back to its localized name.
 struct DisplayRef: Codable, Equatable, Hashable, Identifiable {
     var key: String
@@ -414,7 +414,7 @@ struct DisplayRef: Codable, Equatable, Hashable, Identifiable {
 }
 
 /// A display setup and the workspaces belonging to it — laptop on its own,
-/// laptop plus the external, lid closed on the Studio Display. Whichever
+/// laptop plus the external, lid closed on the big display. Whichever
 /// profile matches the attached displays is the live one, so its workspaces
 /// own the hotkeys and the menu (see DisplayProfiles.swift).
 struct DisplayProfile: Codable, Equatable, Hashable, Identifiable {
@@ -471,7 +471,7 @@ struct DisplayProfile: Codable, Equatable, Hashable, Identifiable {
 
     var isBound: Bool { !displays.isEmpty }
 
-    /// "MacBook + M14" — for the menu and the Displays tab.
+    /// "MacBook + Desk Monitor" — for the menu and the Displays tab.
     var displaySummary: String {
         displays.isEmpty ? "Not bound to any displays yet" : displays.map(\.name).joined(separator: " + ")
     }

@@ -1,7 +1,10 @@
 # Audit: the previous workspace's window stays up after a switch
 
 2026-11-10. Tile Bandit 1.5.0 (`dbbaa11`), the copy installed in /Applications,
-on macOS 27.2. Nothing was changed in the code; this is the audit only.
+on macOS 27.2. File and line numbers are as of that commit, before any fix.
+
+App and workspace names are generic stand-ins: "the browser" is the app that
+sat in several workspaces, "Chat", "Code" and "Web" the three workspaces.
 
 ## Summary
 
@@ -15,8 +18,9 @@ never hidden (an app in both workspaces is left alone on purpose), it is put in
 front again, and the new workspace's other windows come back behind it.
 
 At 22:01:15 the owner switched workspaces 16 times in ten seconds on a setup
-where Chrome is in all three workspaces. Every one of the 16 hid and showed
-exactly the right apps, and every one of the 16 then put Chrome in front.
+where the browser is in all three workspaces. Every one of the 16 hid and
+showed exactly the right apps, and every one of the 16 then put the browser in
+front.
 
 The rest of the audit found one more mechanism that is real and measured (an
 app that is busy keeps its window until it is free, and nothing checks
@@ -75,46 +79,49 @@ first), `:185-193` (`recordActivation` remembers any app of the active
 workspace that comes to the front, shared or not), `:93-96` (an app in both
 workspaces is never hidden).
 
-**What goes wrong.** Take Chrome in workspaces M and C. You read something in
-Chrome while in C, so C remembers Chrome. You do the same in M, so M remembers
-Chrome. From then on, switching between them with Chrome in front does this:
-the other apps are swapped behind it, and Chrome is brought to the front,
-where it already was. If Chrome's window covers the others, the screen does not
-change at all. Only the name in the menu bar does.
+**What goes wrong.** Take a browser in workspaces Chat and Code. You read
+something in the browser while in Code, so Code remembers the browser. You do
+the same in Chat, so Chat remembers it too. From then on, switching between
+them with the browser in front does this: the other apps are swapped behind it,
+and the browser is brought to the front, where it already was. If its window
+covers the others, the screen does not change at all. Only the name in the menu
+bar does.
 
-It is intermittent because the memory follows the last click. Click Kururu
-while in C and the next switch to C lands on Kururu and looks right; click
-Chrome there and it looks broken again.
+It is intermittent because the memory follows the last click. Click the editor
+while in Code and the next switch to Code lands on the editor and looks right;
+click the browser there and it looks broken again.
 
-**Evidence.** The owner's 16 switches between 22:01:15 and 22:01:25, on the
-setup with the laptop and an AirPlay display, where M is Chrome, WhatsApp and
-Discord, C is Yaak, Kururu and Chrome, and a third workspace is Chrome alone:
+**Evidence.** The owner's 16 switches between 22:01:15 and 22:01:25, on a
+two-display setup with three workspaces: Chat is the browser and two chat apps,
+Code is the editor and the browser, Web is the browser alone.
 
 | | Switch to | Apps shown | Apps hidden (that had been visible) | Brought to front |
 |---|---|---|---|---|
-| 1 | M | Chrome, WhatsApp, Discord | Kururu | Chrome |
-| 2 | Chrome | Chrome | Kururu, WhatsApp, Discord | Chrome |
-| 3 | M | Chrome, WhatsApp, Discord | Kururu | Chrome |
-| 4 | C | Kururu, Chrome | WhatsApp, Discord | Chrome |
-| 5 | Chrome | Chrome | WhatsApp, Discord, Kururu | Chrome |
-| 6-16 | the same three, in turn | correct every time | correct every time | Chrome, 11 of 11 |
+| 1 | Chat | browser, both chat apps | editor | browser |
+| 2 | Web | browser | editor, both chat apps | browser |
+| 3 | Chat | browser, both chat apps | editor | browser |
+| 4 | Code | editor, browser | both chat apps | browser |
+| 5 | Web | browser | both chat apps, editor | browser |
+| 6-16 | the same three, in turn | correct every time | correct every time | browser, 11 of 11 |
 
-The window server accepted all 16 requests ("new foreground connection …
-com.google.chrome"). Row 4 is the telling one: Kururu was running and had just
-been shown, yet Chrome was focused, so C's memory said Chrome.
+The window server accepted all 16 requests ("new foreground connection" for
+the browser each time). Row 4 is the telling one: the editor was running and
+had just been shown, yet the browser was focused, so Code's memory said the
+browser.
 
-A minute later the owner had typed in Kururu, and the observer saw the next
-switches behave: 22:11:33 to C focused Kururu and the screen went from Chrome,
-WhatsApp and Discord to Chrome and Kururu; 22:13:09 to the Chrome workspace
-left Chrome alone on screen; 22:13:12 back to C focused Kururu again.
+A minute later the owner had typed in the editor, and the observer saw the next
+switches behave: 22:11:33 to Code focused the editor and the screen went from
+the browser and the chat apps to the browser and the editor; 22:13:09 to Web
+left the browser alone on screen; 22:13:12 back to Code focused the editor
+again.
 
-How common this is: every display setup in the owner's config but one has an
-app in more than one workspace (Chrome, Arc or Obsidian). Only the laptop on
-its own has none.
+How common this is: sharing an app between workspaces is the documented use
+(the README's own example is a browser), so most setups are exposed. Only a
+setup with no app in two workspaces is not.
 
-**To confirm it yourself.** In a setup with Chrome in two workspaces, click
-Chrome in each, then switch between them: nothing moves. Click another app in
-one of them and switch away and back: now it works.
+**To confirm it yourself.** In a setup with a browser in two workspaces, click
+the browser in each, then switch between them: nothing moves. Click another app
+in one of them and switch away and back: now it works.
 
 **Proposed fix.** Keep, per workspace, the apps in the order they were last
 used, not only the last one. When choosing what to focus, skip the app that is
@@ -149,14 +156,14 @@ then the rest of the new workspace. A window of the old workspace's shared app
 can sit on top of the new workspace's second app, and on top of the focused
 app's second window.
 
-**Evidence.** At 22:10:04 Discord was shown and never activated; that part is
+**Evidence.** At 22:10:04 a chat app was shown and never activated; that part is
 certain. The observer did not record stacking order, so the order itself is
 from how unhide is documented to work, not from a measurement.
 
 **To confirm.** Add the logging in "Logging to add" (it lists on-screen windows
-front to back after each switch), or: two workspaces sharing a large Chrome
+front to back after each switch), or: two workspaces sharing a large browser
 window, the target with two other apps; switch and see whether the second app
-is under Chrome.
+is under the browser.
 
 **Proposed fix.** Activate with `.activateAllWindows`. Then decide whether a
 switch should also raise the workspace's other apps above what stayed
@@ -171,7 +178,7 @@ the screen again after `switchTo` returns.
 
 **What goes wrong.** Hiding is done by the app itself, on its main thread. The
 log shows each app running its own `DoHide(self)`. An app that is busy at that
-instant (a browser under load, an Electron app in a long task, Xcode indexing)
+instant (a browser under load, an Electron app in a long task, an IDE indexing)
 keeps its windows up until it gets to the request. An app that never gets to
 it, or drops it, stays up until the next switch, because the request is sent
 once.
@@ -233,8 +240,8 @@ Also at line 237: an app in several workspaces, none of them active, sends you
 to the first in config order, not the one used last.
 
 **Evidence.** None of the three was caught. What was caught is the feature
-working: at 22:10:04 WhatsApp was brought forward by hand from the Chrome
-workspace and Tile Bandit switched to M about 0.15 s later.
+working: at 22:10:04 a chat app was brought forward by hand from the Web
+workspace and Tile Bandit switched to Chat about 0.15 s later.
 
 **Proposed fix.** Cancel the pending check at the top of `switchTo`. Count
 switches, have each check remember the count when it was armed, and when a
@@ -255,7 +262,7 @@ pulls the workspace") is the owner's call.
   Tile Bandit and not in the allowed set, identifier or not.
 - An app in no workspace that is launched or brought forward after the switch
   stays until the next switch or ⌥0. Captured at 22:11:41: an unassigned app
-  was opened in C and stayed on screen with it. This is by design (you opened
+  was opened in Code and stayed on screen with it. This is by design (you opened
   it), listed so it is not mistaken for the bug. Follow-focus ignores such
   apps (`:227-237`).
 - `WorkspaceEngine.swift:247-249`: apps with no Dock icon are never asked.
@@ -289,9 +296,8 @@ so in the menu; leaving full screen for the user needs Accessibility.
 
 **What goes wrong.**
 
-- **A placeholder display is taken for a real setup.** The config holds a
-  setup with an empty name, bound to the display key
-  `edid:1970170734-1986622068-0`. Those two numbers are the ASCII for `unkn`
+- **A placeholder display is taken for a real setup.** A setup with an empty
+  name had been filed for the display key `edid:1970170734-1986622068-0`. Those two numbers are the ASCII for `unkn`
   and `virt`: the stand-in macOS reports when no real display is available
   (lid closed and the monitor asleep or gone). The guard at line 167 only
   rejects *zero* displays, so the stand-in became a setup: Tile Bandit cloned
@@ -305,7 +311,7 @@ so in the menu; leaving full screen for the user needs Accessibility.
 - A display whose identity changes between sessions gets a new setup each time,
   with new workspace ids, so the focus memory for it starts empty.
 
-**Evidence.** The phantom setup in the config. The Mac did not sleep during the
+**Evidence.** That phantom setup. The Mac did not sleep during the
 observation, so no wake was captured. The end state after a wake should be
 consistent (the last adoption wins); this is a cause of windows changing "by
 themselves", less of the reported symptom.
@@ -399,16 +405,22 @@ read back for this audit. Read with
 With these in place, the next time a window stays up, the lines around that
 minute say which finding it was.
 
-## Decisions for the owner
+## Decisions
+
+The questions the audit left open, and the owner's answers (2026-11-10):
 
 1. **What should a switch focus when the remembered app is the one already in
-   front?** Recommended: the workspace's most recent *other* app (finding 1).
-   The alternative is to keep today's behaviour and only make it visible, with
-   a brief flash of the workspace name.
+   front?** The audit proposed the workspace's most recent *other* app. The
+   owner's answer is stricter and replaces that: a workspace comes back exactly
+   as it was left. Each workspace remembers its own last focus, down to the
+   window; using a shared app in one workspace never changes what another
+   remembers; if the last focus really was the shared app, the shared app in
+   front is correct.
 2. **Should a switch raise all of the workspace's windows above a shared app's
-   window**, or only the focused app (finding 2)?
-3. **Should an app that brings itself forward be able to move the workspace**
-   (finding 4), or only a deliberate Cmd-Tab, Dock click or hotkey?
-4. **On which display setup do you usually see it?** If it is also on the
-   laptop alone, where no app is shared, findings 3 to 6 move up, and the
-   logging is the next step before any fix.
+   window?** Yes: the whole stack goes back in the order it was left in, as far
+   as macOS allows.
+3. **Should an app that brings itself forward be able to move the workspace?**
+   Yes.
+4. **On which display setup is it seen?** On every one, including a single
+   display with no shared app, intermittently. So findings 3 and 9 were built
+   too, along with the log, rather than left for later.

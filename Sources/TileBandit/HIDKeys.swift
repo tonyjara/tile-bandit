@@ -89,7 +89,7 @@ enum HIDKeys {
     /// which is how Apple keyboards report it — the built-in keyboard says so
     /// itself, as `FnModifierUsagePage`/`FnModifierUsage` on its HID service.
     ///
-    /// Verified on a MacBook Pro's built-in keyboard (M2 Max, macOS 27) both
+    /// Verified on a MacBook Pro's built-in keyboard (macOS 27) both
     /// ways round through hidutil. As a source, fn arrives as whatever it was
     /// mapped to, and the system stops seeing an fn press at all: fn+top row
     /// sends the media keys rather than F1–F12, and the Globe key's own action

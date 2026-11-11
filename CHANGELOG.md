@@ -124,7 +124,7 @@ the Homebrew cask points at.
   Note: this is a defensive guard, not a fix for an observed failure. Detection
   goes through the same `isKeyboard()` the rest of the app uses, so a composite
   device that declares keyboard usage in `DeviceUsagePairs` rather than as its
-  primary usage — a Dygma Raise, for one — is correctly seen as a keyboard and
+  primary usage — some split keyboards, for one — is correctly seen as a keyboard and
   is never flagged.
 
 ## 1.0.0

@@ -1,8 +1,8 @@
 # Tile Bandit
 
 macOS menu-bar workspace switcher (FlashSpace-style). Pure SwiftPM — no
-`.xcodeproj`, and it should stay that way (the owner works in neovim with
-sourcekit-lsp, which understands SPM natively).
+`.xcodeproj`, and it should stay that way (sourcekit-lsp understands SPM
+natively, so any editor that speaks it works).
 
 ## Commands
 
@@ -190,8 +190,8 @@ sourcekit-lsp, which understands SPM natively).
 - `DisplayProfiles.swift` — display-setup detection. `DisplayIdentity` builds a
   stable per-screen key (built-in → `builtin`; externals → EDID
   `vendor-model-serial`, since serial is 0 on plenty of monitors; otherwise the
-  localized name) and infers profile names ("MacBook", "MacBook + M14",
-  "Studio Display"). `snapshot()` sorts by key so rearranging displays isn't a
+  localized name) and infers profile names ("MacBook", "MacBook + Desk Monitor",
+  "Desk Monitor"). `snapshot()` sorts by key so rearranging displays isn't a
   new setup, and suffixes repeated keys so *how many* identical panels are
   attached stays part of the fingerprint. `DisplayProfileManager` watches
   `didChangeScreenParametersNotification` (debounced 1.2s — one plug fires it
@@ -358,7 +358,7 @@ sourcekit-lsp, which understands SPM natively).
   Every key is on the keyboard page (0x07) except `fn` (also `globe` in the
   config), which is usage 3 on Apple's vendor page — `0xFF00000003` to hidutil,
   and what the built-in keyboard itself declares as `FnModifierUsagePage`/
-  `FnModifierUsage`. Verified both ways on an M2 Max MacBook Pro's built-in
+  `FnModifierUsage`. Verified both ways on a MacBook Pro's built-in
   keyboard: remapped *from*, fn arrives as its target and the system never
   sees an fn press, so fn+top row sends the media keys instead of F1–F12 and
   the Globe key's own action stops; a key remapped *to* fn takes all of that
@@ -378,7 +378,7 @@ sourcekit-lsp, which understands SPM natively).
   driver-provided virtual keyboards (Karabiner's and the like).
   `isKeyboard()` checks `DeviceUsagePairs` as well as the primary usage, and
   that second half is not belt-and-braces: a composite board publishes one
-  interface carrying several top-level collections, so a Dygma Raise arrives
+  interface carrying several top-level collections, so a split keyboard of that kind arrives
   with a *primary* usage of 12:1 (consumer) and its keyboard only named in the
   pairs. Reading the registry by `PrimaryUsage` alone — `ioreg | grep
   '"PrimaryUsage" = 6'`, say — concludes such a keyboard isn't one at all.

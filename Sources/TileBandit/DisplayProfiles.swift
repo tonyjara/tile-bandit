@@ -77,8 +77,8 @@ enum DisplayIdentity {
         }
     }
 
-    /// Name a setup from what's plugged in: "MacBook", "MacBook + M14",
-    /// "Studio Display" (lid closed). The built-in panel always leads.
+    /// Name a setup from what's plugged in: "MacBook", "MacBook + Desk Monitor",
+    /// "Desk Monitor" (lid closed). The built-in panel always leads.
     static func inferredName(for displays: [DisplayRef]) -> String {
         guard !displays.isEmpty else { return "No Displays" }
         let externals = displays.filter { !$0.key.hasPrefix(builtInKey) }.map(\.name)

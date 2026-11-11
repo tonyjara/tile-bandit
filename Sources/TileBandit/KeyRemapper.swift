@@ -42,7 +42,7 @@ struct KeyRemapPlan: Equatable {
         var holdMilliseconds: Int
         /// The layer this hold opens. Keys not in here just wear `hold`.
         var chords: [CGKeyCode: [Chord]]
-        /// "Raise · Caps Lock" — for logging and the menu.
+        /// "Keyboard name · Caps Lock" — for logging and the menu.
         var origin: String
     }
 

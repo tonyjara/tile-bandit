@@ -259,8 +259,8 @@ final class WorkspaceEngine {
     /// back by some route we never hear about — a notification banner, the
     /// Dock, Mission Control — can still read `isHidden == true` here long
     /// after it's on screen. Asking first meant that app was skipped and sat
-    /// over the grid through switch after switch ("I'm in C but WhatsApp is
-    /// still there, covering Ghostty"). `hide()` on an app that really is
+    /// over the grid through switch after switch ("I'm in one workspace but
+    /// another's chat app is still there, covering the terminal"). `hide()` on an app that really is
     /// hidden is a no-op, so the check bought nothing and cost correctness.
     private func hideApps(in running: [NSRunningApplication], keeping allowed: Set<String>) {
         for app in running {

@@ -132,7 +132,7 @@ Tile Bandit recognises which screens are attached and switches to that setup's
 workspaces on its own.
 
 - Profiles are **created automatically** the first time a setup is seen, named
-  from the displays themselves ("MacBook", "MacBook + M14", "Studio Display"),
+  from the displays themselves ("MacBook", "MacBook + Desk Monitor", "Desk Monitor"),
   and **seeded with a copy of the profile you were just on** — plug in a
   monitor and your workspaces are already there, ready to be re-tiled.
 - Plugging or unplugging restores the workspace you last used in that profile;
@@ -153,7 +153,7 @@ profile to the displays attached right now.
 ## Grid layout
 
 A workspace holds **one grid per display**. That's how you say "in this
-workspace the editor and terminal go side by side on the big monitor and Slack
+workspace the editor and terminal go side by side on the big monitor and chat
 fills the laptop".
 
 In Settings → **Workspaces**, pick a display, set its columns and rows, then
@@ -256,10 +256,10 @@ throwing the file out.
   "profiles": [
     {
       "id": "9C2A1B44-0000-4000-8000-000000000001",
-      "name": "MacBook + M14",
+      "name": "MacBook + Desk Monitor",
       "displays": [
         { "key": "builtin", "name": "MacBook" },
-        { "key": "edid:12462-25053-0", "name": "M14" }
+        { "key": "edid:1234-5678-0", "name": "Desk Monitor" }
       ],
       "workspaces": [
         {
@@ -271,7 +271,7 @@ throwing the file out.
           "shortcut": { "key": "1", "option": true },
           "grids": [
             {
-              "displayKey": "edid:12462-25053-0",
+              "displayKey": "edid:1234-5678-0",
               "columns": 2,
               "rows": 2,
               "layout": {
