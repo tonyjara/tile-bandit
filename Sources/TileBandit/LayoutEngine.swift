@@ -47,6 +47,62 @@ enum AX {
         }
     }
 
+    /// One window of a per-window app, with what a switch needs to know to
+    /// place it (WindowScope).
+    struct OwnWindow {
+        let id: CGWindowID
+        let element: AXUIElement
+        /// Top-left origin, as Accessibility gives it.
+        let frame: CGRect
+        let title: String?
+    }
+
+    /// An app's standard windows that can be moved: not minimised, not in
+    /// native full screen (a full-screen window has a Space of its own and
+    /// stays there). Nil when the app didn't answer, so the caller can skip it
+    /// instead of taking silence for "no windows".
+    static func ownWindows(pid: pid_t) -> [OwnWindow]? {
+        let app = AXUIElementCreateApplication(pid)
+        let (value, error) = copy(app, kAXWindowsAttribute)
+        guard error == .success, let list = value as? [AXUIElement] else {
+            return error == .noValue ? [] : nil
+        }
+        return list.compactMap { window in
+            let subrole = string(window, kAXSubroleAttribute)
+            guard subrole == nil || subrole == kAXStandardWindowSubrole,
+                  bool(window, kAXMinimizedAttribute) != true,
+                  bool(window, "AXFullScreen") != true,
+                  let id = windowID(of: window),
+                  let frame = axFrame(of: window)
+            else { return nil }
+            return OwnWindow(id: id, element: window, frame: frame, title: string(window, kAXTitleAttribute))
+        }
+    }
+
+    /// Whether windows can be told apart by id at all. Per-window workspaces
+    /// stay off without it: matching by frame is good enough to restore an
+    /// order, not to decide which window to move out of the way.
+    static var canIdentifyWindows: Bool { windowIDGetter != nil }
+
+    static func focusedWindowID(pid: pid_t) -> CGWindowID? {
+        focusedWindow(pid: pid).flatMap(windowID(of:))
+    }
+
+    static func mainWindowID(pid: pid_t) -> CGWindowID? {
+        let app = AXUIElementCreateApplication(pid)
+        guard let ref = copyValue(app, kAXMainWindowAttribute),
+              CFGetTypeID(ref) == AXUIElementGetTypeID()
+        else { return nil }
+        return windowID(of: ref as! AXUIElement)
+    }
+
+    /// Moves a window without resizing it. `point` is in Accessibility's own
+    /// space (top-left origin). The system may put it somewhere else — it
+    /// keeps a corner of every window on a display — so read `axFrame` after.
+    static func setPosition(_ window: AXUIElement, toAX point: CGPoint) {
+        set(window, kAXPositionAttribute, point: point)
+    }
+
     /// The window an app considers focused (what hold-to-maximize acts on).
     static func focusedWindow(pid: pid_t) -> AXUIElement? {
         let app = AXUIElementCreateApplication(pid)
@@ -179,7 +235,7 @@ enum AX {
         return unsafeBitCast(symbol, to: WindowIDGetter.self)
     }()
 
-    private static func windowID(of window: AXUIElement) -> CGWindowID? {
+    static func windowID(of window: AXUIElement) -> CGWindowID? {
         guard let getter = windowIDGetter else { return nil }
         var id = CGWindowID(0)
         return getter(window, &id) == .success && id != 0 ? id : nil
@@ -377,8 +433,10 @@ final class MaximizeHold {
 /// *switching* still never moves a window. This is also the only thing that
 /// moves a window *between* displays: that's the point of a grid per display.
 enum LayoutEngine {
+    /// - Parameter elsewhere: windows of per-window apps that live in another
+    ///   workspace and are parked. Tiling them would pull them back on screen.
     @discardableResult
-    static func apply(_ workspace: Workspace) -> Bool {
+    static func apply(_ workspace: Workspace, skipping elsewhere: Set<CGWindowID> = []) -> Bool {
         guard AccessibilityPermission.isGranted else {
             AccessibilityPermission.request()
             return false
@@ -391,6 +449,7 @@ enum LayoutEngine {
             guard !placements.isEmpty else { continue }
             for app in NSRunningApplication.runningApplications(withBundleIdentifier: ref.bundleId) {
                 for window in AX.standardWindows(pid: app.processIdentifier) {
+                    if !elsewhere.isEmpty, let id = AX.windowID(of: window), elsewhere.contains(id) { continue }
                     guard let target = target(for: window, placements: placements, screens: screens) else { continue }
                     AX.setFrame(window, to: target.grid.size.frame(for: target.region, in: target.screen.visibleFrame))
                     movedAnything = true

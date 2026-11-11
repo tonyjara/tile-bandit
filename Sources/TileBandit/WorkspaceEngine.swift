@@ -9,6 +9,12 @@ import AppKit
 /// both the current and the target workspace (or listed as floating) is never
 /// hidden, so it keeps its exact position; only its place in the stack changes.
 ///
+/// The one exception is asked for app by app: for the apps in
+/// `Config.perWindowApps` a *window* lives in one workspace, and since macOS
+/// cannot hide a single window, a switch parks the ones that live elsewhere in
+/// a corner and brings this workspace's back (WindowScope). No other app's
+/// windows are moved, and none at all unless an app is opted in.
+///
 /// Hiding and showing whole apps (NSRunningApplication) needs no permission.
 /// Putting the *order* back does its best with what it has: with the
 /// Accessibility grant it works window by window (so a shared app can have one
@@ -37,6 +43,9 @@ final class WorkspaceEngine {
     }
 
     private let store: ConfigStore
+    /// Per-window workspaces. Off (`scope.isOn`) unless an app is opted in
+    /// and Accessibility is granted; every use below asks first.
+    private let scope: WindowScope
     private(set) var activeWorkspaceID: UUID?
     var onActiveWorkspaceChange: (() -> Void)?
 
@@ -88,6 +97,14 @@ final class WorkspaceEngine {
     /// would overwrite the good memory of it.
     private static let settleTime: TimeInterval = 0.5
 
+    /// For this long after a switch (or after a window was sent away), the
+    /// focused window of a per-window app living elsewhere does not move the
+    /// workspace: this workspace's window is put forward instead. Without it,
+    /// an app that was slow to change its focused window would send a switch
+    /// straight back where it came from.
+    private static let windowFollowHold: TimeInterval = 1.0
+    private var holdWindowFollowUntil = Date.distantPast
+
     /// When, after a switch, the screen is read back. The first three always
     /// run: 0.1 s is when responsive apps have finished hiding and showing (it
     /// takes them 20–50 ms) and the stack can be put in order; 0.4 s confirms
@@ -103,6 +120,10 @@ final class WorkspaceEngine {
 
     init(store: ConfigStore) {
         self.store = store
+        scope = WindowScope(store: store)
+        // Cmd-` changes an app's focused window without activating anything.
+        // For per-window apps that is taken like an app coming forward.
+        scope.onFocusedWindowChange = { [weak self] in self?.scheduleFollowCheck() }
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
@@ -146,11 +167,21 @@ final class WorkspaceEngine {
         // workspace being left is on screen as the user had it.
         let leaving = activeWorkspace
         let frontBefore = NSWorkspace.shared.frontmostApplication
-        if let leaving { remember(leaving) }
+        let running = regularRunningApps()
+        // Per-window apps: one reading of their windows serves both ends of
+        // the switch. Nil for everyone who has not opted an app in.
+        let scan = scope.isOn ? scope.scan(running) : nil
+        if let leaving { remember(leaving, scan: scan) }
 
         switchSeq += 1
-        let running = regularRunningApps()
         let allowed = Set(workspace.apps.map(\.bundleId)).union(floatingIDs())
+
+        // 0. Windows of per-window apps go where this workspace wants them
+        //    before anything is shown: the ones that live elsewhere to their
+        //    corner, its own back where they were.
+        let arranged = scan.map {
+            scope.arrange(for: workspace, scan: $0, preferring: snapshots[id]?.stack.map(\.window) ?? [])
+        }
 
         // 1. Reveal the workspace's apps first so the screen is never empty.
         var shown = 0
@@ -182,6 +213,7 @@ final class WorkspaceEngine {
 
         activeWorkspaceID = id
         switchedAt = Date()
+        holdWindowFollowUntil = switchedAt.addingTimeInterval(Self.windowFollowHold)
         recentWorkspaces.removeAll { $0 == id }
         recentWorkspaces.insert(id, at: 0)
         if let profileID { lastWorkspaceInProfile[profileID] = id }
@@ -193,6 +225,7 @@ final class WorkspaceEngine {
                 + " | focus: \(focus.map { label($0) } ?? "nothing") (\(why))"
                 + " | asked \(shown) to show, \(asked.count) to hide"
                 + " | order restored by \(byWindow ? "window" : "app (no Accessibility grant)")"
+                + (arranged.map { " | per-window apps: \($0.summary)" } ?? "")
                 + (snapshot == nil ? " | first visit, nothing remembered" : "")
         )
         onActiveWorkspaceChange?()
@@ -200,6 +233,7 @@ final class WorkspaceEngine {
         schedulePass(Plan(
             seq: switchSeq,
             started: switchedAt,
+            workspace: id,
             allowed: allowed,
             members: Set(workspace.apps.map(\.bundleId)),
             asked: asked,
@@ -229,6 +263,8 @@ final class WorkspaceEngine {
             switchTo(target.id, trigger: .display)
         } else {
             Log.switching.line("display change: no workspace to land on in this setup, windows left as they are")
+            // With no workspace active nothing says a window should be parked.
+            scope.releaseAll(because: "no workspace is active in this display setup")
             onActiveWorkspaceChange?()
         }
     }
@@ -275,6 +311,13 @@ final class WorkspaceEngine {
         let frontmost = NSWorkspace.shared.frontmostApplication
         pendingPass?.cancel()
         switchSeq += 1
+        if let active {
+            if scope.isOn { scope.arrange(for: active, scan: scope.scan(running)) }
+        } else {
+            // Launch, or a display setup with nowhere to land: no workspace is
+            // active, so no window has a reason to be in a corner.
+            scope.releaseAll(because: "no workspace is active")
+        }
         let asked = hideApps(in: running, keeping: allowed)
 
         // Only steal focus if the app the user was in just got hidden.
@@ -292,6 +335,7 @@ final class WorkspaceEngine {
         schedulePass(Plan(
             seq: switchSeq,
             started: Date(),
+            workspace: active?.id,
             allowed: allowed,
             members: [],
             asked: asked,
@@ -299,6 +343,74 @@ final class WorkspaceEngine {
             movedFocus: focus != nil,
             restore: nil
         ), index: 0)
+    }
+
+    // MARK: - Per-window apps
+
+    /// Windows of per-window apps that live in another workspace than the one
+    /// on screen. Apply Grid Layout leaves them in their corner.
+    var windowsLivingElsewhere: Set<CGWindowID> {
+        scope.isOn ? scope.windowsElsewhere(than: activeWorkspaceID) : []
+    }
+
+    /// Sends the focused window of a per-window app to live in another
+    /// workspace. The window goes; the user stays.
+    ///
+    /// - Parameter app: for the menu, which runs after it has closed and so
+    ///   cannot ask who is in front (see `AppDelegate.menuWillOpen`).
+    func moveFocusedWindow(to id: UUID, of app: NSRunningApplication? = nil) {
+        guard let target = store.workspaces.first(where: { $0.id == id }) else { return }
+        let refuse = { (why: String) in
+            Log.windows.failure("move window to \(target.name): \(why)")
+            NSSound.beep()
+        }
+        guard scope.isOn else { return refuse("per-window apps are off (none set, or no Accessibility grant)") }
+        guard let app = app ?? NSWorkspace.shared.frontmostApplication, let bundleId = app.bundleIdentifier else {
+            return refuse("nothing is in front")
+        }
+        guard scope.covers(bundleId) else { return refuse("\(label(app)) is not a per-window app") }
+        guard target.apps.contains(where: { $0.bundleId == bundleId }) else {
+            return refuse("\(target.name) does not list \(label(app))")
+        }
+        guard let window = scope.focusedWindow(of: app) else {
+            return refuse("\(label(app)) has no focused window that can be moved (minimised, or full screen?)")
+        }
+
+        scope.move(window, to: target, active: activeWorkspaceID)
+        holdWindowFollowUntil = Date().addingTimeInterval(Self.windowFollowHold)
+        Log.windows.line("window \(window.live.id) of \(label(app)) now lives in \(target.name)")
+
+        // Its window has left for a corner: focus should not stay in it.
+        guard let active = activeWorkspace, active.id != id else { return }
+        let stack = snapshots[active.id]?.stack.map(\.window) ?? []
+        if scope.putHomeWindowForward(of: app, in: active, preferring: stack) { return }
+        let allowed = Set(active.apps.map(\.bundleId)).union(floatingIDs())
+        let running = regularRunningApps()
+        let next = WindowList.onScreen().lazy
+            .filter { $0.pid != app.processIdentifier }
+            .compactMap { window in running.first { $0.processIdentifier == window.pid } }
+            .first { self.mayStay($0, allowed: allowed) && $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+        if let next { activate(next, allWindows: false) }
+    }
+
+    /// Brings every parked window back, from the menu. The homes are kept, so
+    /// the next switch parks again: this is for looking, and for getting out
+    /// of trouble.
+    func releaseParkedWindows() {
+        scope.releaseAll(because: "asked for from the menu")
+    }
+
+    /// The config changed: an app taken off the per-window list gets its
+    /// windows back.
+    func configChanged() {
+        scope.reconcile()
+    }
+
+    /// Quitting. A parked window must not outlive the app that parked it.
+    func shutDown() {
+        followCheck?.cancel()
+        pendingPass?.cancel()
+        scope.releaseAll(because: "Tile Bandit is quitting")
     }
 
     // MARK: - Memory
@@ -310,10 +422,20 @@ final class WorkspaceEngine {
     /// activation notifications: those arrive 40–55 ms late and were credited
     /// to whichever workspace was active *by then*, so an app in two
     /// workspaces could become the remembered focus of one it was never used in.
-    private func remember(_ workspace: Workspace) {
+    ///
+    /// For per-window apps this is also where a window gets its home: the
+    /// workspace being left takes the ones in sight that have none (`scan` is
+    /// nil unless an app is opted in). Windows that live elsewhere stay out of
+    /// the snapshot — they are in a corner, not part of this workspace.
+    private func remember(_ workspace: Workspace, scan: WindowScope.Scan? = nil) {
         guard Date().timeIntervalSince(switchedAt) >= Self.settleTime else {
             Log.switching.quiet("\(workspace.name) left before it had settled; its memory is kept as it was")
             return
+        }
+        var elsewhere = Set<CGWindowID>()
+        if let scan {
+            scope.claim(for: workspace, scan: scan)
+            elsewhere = scope.windowsElsewhere(than: workspace.id)
         }
         let members = Set(workspace.apps.map(\.bundleId)).union(floatingIDs())
         var bundleOf: [pid_t: String] = [:]
@@ -321,6 +443,7 @@ final class WorkspaceEngine {
             if let bundleId = app.bundleIdentifier { bundleOf[app.processIdentifier] = bundleId }
         }
         let onScreen = WindowList.onScreen().compactMap { window -> WorkspaceSnapshot.Entry? in
+            guard !elsewhere.contains(window.id) else { return nil }
             guard let bundleId = bundleOf[window.pid], members.contains(bundleId) else { return nil }
             return WorkspaceSnapshot.Entry(window: window.id, bundleId: bundleId)
         }
@@ -401,6 +524,33 @@ final class WorkspaceEngine {
             Log.follow.quiet("\(here) → stay (floating app)")
             return
         }
+        // A per-window app is judged by its focused window, not by the app:
+        // the app may well belong here while that window lives elsewhere
+        // (Cmd-`, a click on a parked corner, a link opened into it).
+        if scope.isOn, scope.covers(bundleId),
+           let window = AX.focusedWindowID(pid: front.processIdentifier),
+           let home = scope.home(of: window) {
+            if home == activeWorkspaceID {
+                Log.follow.quiet("\(here) → stay (its focused window lives here)")
+                return
+            }
+            guard let target = store.workspaces.first(where: { $0.id == home }) else { return }
+            if let active, Date() < holdWindowFollowUntil {
+                // Too soon after a switch to be the user's doing. Answer by
+                // putting this workspace's window forward, never by going back.
+                let stack = snapshots[active.id]?.stack.map(\.window) ?? []
+                let put = scope.putHomeWindowForward(of: front, in: active, preferring: stack)
+                Log.follow.line(
+                    "\(here) → stay: its focused window lives in \(target.name), but \(active.name) was only just arrived at"
+                        + (put ? "; its own window put forward" : "; it has no window here to put forward")
+                )
+                return
+            }
+            Log.follow.line("\(here) → switch to \(target.name) (its focused window lives there)")
+            switchTo(target.id, trigger: .follow, bringing: front)
+            return
+        }
+
         // Already where it belongs — this covers the tail of our own switches,
         // which end by focusing an app in the workspace just switched to.
         if let active, active.apps.contains(where: { $0.bundleId == bundleId }) {
@@ -450,6 +600,8 @@ final class WorkspaceEngine {
     private struct Plan {
         let seq: Int
         let started: Date
+        /// The workspace on screen after it. Nil for a clean-up with none active.
+        let workspace: UUID?
         /// Bundle ids that may be on screen.
         let allowed: Set<String>
         /// The target workspace's own apps, which must come back.
@@ -479,9 +631,27 @@ final class WorkspaceEngine {
         guard plan.seq == switchSeq else { return }
 
         let running = regularRunningApps()
-        let windows = WindowList.onScreen()
-        let drawn = Set(windows.map(\.pid))
+        let everyWindow = WindowList.onScreen()
+        let drawn = Set(everyWindow.map(\.pid))
         let front = NSWorkspace.shared.frontmostApplication
+
+        // Per-window apps: whatever is in the wrong place is moved again, and
+        // windows that live elsewhere take no part in this workspace's order.
+        var scopeNote = ""
+        var windows = everyWindow
+        if scope.isOn, let workspace = store.workspaces.first(where: { $0.id == plan.workspace }) {
+            if index < Self.routinePasses {
+                let fixed = scope.verify(workspace, windows: everyWindow)
+                if fixed.strays > 0 {
+                    scopeNote += " | STRAY (\(fixed.strays) window(s) that live in another workspace were in sight, parked again)"
+                }
+                if fixed.stillParked > 0 {
+                    scopeNote += " | STILL PARKED (\(fixed.stillParked) window(s) that live here, brought back again)"
+                }
+            }
+            let elsewhere = scope.windowsElsewhere(than: workspace.id)
+            windows = everyWindow.filter { !elsewhere.contains($0.id) }
+        }
 
         // Asked to hide and still drawing a window. The app in front is left
         // alone when the switch moved focus elsewhere: it can only be in front
@@ -522,9 +692,10 @@ final class WorkspaceEngine {
         let summary = "#\(plan.seq) check +\(elapsed)s | in front: \(label(front))"
             + " | windows front to back: \(names(visible))"
             + (orderNote.isEmpty ? "" : " | \(orderNote)")
+            + scopeNote
             + (leftovers.isEmpty ? "" : " | LEFTOVER (asked to hide, still on screen, asked again): \(names(leftovers))")
             + (stillHidden.isEmpty ? "" : " | STILL HIDDEN (asked to show again): \(names(stillHidden))")
-        if leftovers.isEmpty, stillHidden.isEmpty {
+        if leftovers.isEmpty, stillHidden.isEmpty, scopeNote.isEmpty {
             Log.switching.line(summary)
         } else {
             Log.switching.failure(summary)

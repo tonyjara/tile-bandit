@@ -68,8 +68,9 @@ natively, so any editor that speaks it works).
   saloon sign — opening the About panel) and the live display setup with its
   profile submenu; Workspaces (each with a ✓ when active and a solid-vs-dashed
   grid glyph saying whether Apply Grid Layout has anything to do there) plus
-  next/previous; Windows; then Setup (which ends with Check for Updates… —
-  see UpdateChecker.swift). Key equivalents come from the config
+  next/previous; Windows (plus Move Window to ▸ and Bring Parked Windows Back
+  once an app is per-window, and only then); then Setup (which ends with Check
+  for Updates… — see UpdateChecker.swift). Key equivalents come from the config
   rather than being hard-coded, so a reassignment shows up in the menu. Section
   headers are `NSMenuItem.sectionHeader` on macOS 14+ and a styled disabled
   item below that. The Key Modifications master switch is in the menu on
@@ -183,13 +184,18 @@ natively, so any editor that speaks it works).
   because that's all the ISO-8601 the config is written in can hold; without it
   a profile stops being equal to itself once saved, and `removeDuplicates` would
   see a change on every reload.
-  `Config.currentVersion` is 4. Decoding *is* the migration: a v1 file (flat
+  `Config.currentVersion` is 5. Decoding *is* the migration: a v1 file (flat
   `workspaces`) becomes a single *unbound* profile, which the first detection
   run adopts onto whatever displays are attached; a v2 workspace's single
   `gridColumns`/`gridRows`/`layout` becomes one unbound `DisplayGrid`, which
   `DisplayProfile.init(from:)` hands to *every* display in the setup (copying
   beats guessing which monitor was meant — the user deletes what doesn't
-  belong). A v3 file simply has no `keyboards`, which decodes to none.
+  belong). A v3 file simply has no `keyboards`, which decodes to none, and a v4
+  file no `perWindowApps` (the opt-in list for per-window workspaces, global
+  like `floatingApps`) or `moveWindowShortcuts`, which decode to none and on.
+  `Config.moveWindowShortcut(for:among:)` derives "send the focused window
+  here" from a workspace's own shortcut plus ⇧ — derived, not stored, and nil
+  until an app is opted in, so nobody loses a key to a feature they don't use.
   `version` is normalised in memory and the legacy keys are dropped on
   the next write.
 - `DisplayProfiles.swift` — display-setup detection. `DisplayIdentity` builds a
@@ -309,6 +315,46 @@ natively, so any editor that speaks it works).
   assigned in the setup you're plugged into. No-op when the profile has no
   workspaces, so a fresh install (or a just-created profile) doesn't blank the
   screen. It gets the same checks afterwards as a switch.
+  **Per-window apps** (`Config.perWindowApps`, off unless the user adds one)
+  are the one case where a switch moves windows. The engine calls `WindowScope`
+  at four points, each behind `scope.isOn`: `switchTo` reads those apps'
+  windows once (`scan`), the workspace being left claims the unhomed ones in
+  `remember` (the same single writer as the snapshot, and windows that live
+  elsewhere are left out of it), `arrange` parks and brings back *before*
+  anything is unhidden, `runPass` calls `verify` (`STRAY`, `STILL PARKED`) and
+  drops windows living elsewhere from the order it restores, and `followFocus`
+  judges a per-window app by its *focused window's* home. For
+  `windowFollowHold` (1 s) after a switch that rule puts this workspace's
+  window forward instead of switching: an app slow to change its focused window
+  would otherwise send a switch straight back. With no workspace active
+  (launch, a display setup with nowhere to land) and on quit (`shutDown`)
+  every parked window is brought back.
+- `WindowHomes.swift` — which window lives in which workspace, for per-window
+  apps. Pure (no AppKit) and covered by `WindowHomesTests`: records keyed by
+  window-server id, `claim` (the workspace being left takes windows in sight
+  with no home), `wanted` (shown / parked / free), `resolve` (a home is found
+  by workspace id, else by *name*, because a new display profile is a clone
+  with fresh ids), `retire` + `adopt` (windows that are gone wait as orphans
+  and are matched to what the app comes back with after a restart: title
+  digest, frame, and whether it sat in a parking corner; only an unambiguous
+  best match is taken). Titles are stored as a digest only. `Parking` is the
+  geometry: macOS never lets a window leave the screen entirely, and what it
+  keeps depends on what is asked — one point inside a bottom corner leaves a
+  1 × 32 pt sliver, a place wholly outside is pulled back to 40 × 32 (measured
+  on macOS 27.2, docs/plans/per-window-workspaces.md). `spot` picks the bottom
+  corner where the least shows on *any* display, so a parked window never
+  lies across a neighbour.
+- `WindowScope.swift` — the Accessibility side of per-window apps. `isOn` is
+  false unless an app is opted in *and* the grant is there, and it never asks
+  for the grant. Every move is read back (`park`/`show` return whether the
+  window really went), the homes are saved to `~/.config/tilebandit/windows.json`
+  with the boot time (window ids start over at login, so a file from an
+  earlier boot turns into orphans), and an `AXObserver` per running per-window
+  app reports focused-window changes, which is the only way to hear a Cmd-`.
+  The log names windows by id and app, never by title. Can't be run in a test
+  for the same reason as the engine; its calls were exercised against a
+  scratch process's own windows (Accessibility on one's own process needs no
+  grant), which is how the parking numbers were measured.
 - `WindowStack.swift` — the screen as the window server lists it and the
   arithmetic on it. `WindowList.onScreen()` is `CGWindowListCopyWindowInfo`
   cut down to ordinary windows, front to back; it needs no permission (only
@@ -317,11 +363,14 @@ natively, so any editor that speaks it works).
   workspace remembers. `StackPlan` is pure and generic — it runs on window ids
   with Accessibility and on pids without — and is what
   `Tests/TileBanditTests` covers, because the engine itself can't be run in a
-  test without hiding the developer's own apps.
+  test without hiding the developer's own apps. `WindowList.everyOwner()` is
+  every window there is, hidden and minimised included, for asking whether a
+  remembered window still exists.
 - `Log.swift` — the trace. Everything goes to the system log under the
   subsystem `com.twonary.TileBandit` (a fixed string: a `swift run` build has
-  no bundle identifier), in categories `switch`, `follow`, `display`, `hotkey`
-  and `ax`. `line` is `notice`, which macOS keeps on disk for days: one line
+  no bundle identifier), in categories `switch`, `follow`, `display`, `hotkey`,
+  `ax` and `window` (per-window apps). `line` is `notice`, which macOS keeps
+  on disk for days: one line
   per switch (what asked for it, from and to, what was in front, what was
   focused and why) and one per check (what is in front, the windows front to
   back, what was done about the order, `LEFTOVER`). `quiet` is `info`, memory
@@ -343,7 +392,11 @@ natively, so any editor that speaks it works).
   workspace's order when the grant is there: `windowsByID` (window-server id →
   AX element, through `_AXUIElementGetWindow` looked up by name at run time so
   its absence can't stop a launch, with a match by frame as the fallback),
-  `raise` and `makeMain`. `target(for:placements:screens:)` picks the display: the one
+  `raise` and `makeMain`; and what per-window apps use: `ownWindows` (an app's
+  movable windows with id, frame and title; nil when it didn't answer),
+  `setPosition`, `focusedWindowID`, `mainWindowID`. `apply` takes the windows
+  that live in another workspace (`skipping:`) and leaves them parked.
+  `target(for:placements:screens:)` picks the display: the one
   the window is already on if the app is placed there (only happens with an
   app on several grids), else the first placement whose display is attached,
   else — nothing attached matches, e.g. a profile forced from the menu for a
@@ -565,7 +618,9 @@ natively, so any editor that speaks it works).
   (NSHostingController), under a poster strip (`SettingsHeader`: the app icon,
   the name in Copperplate, the version) — the one window with room for the
   thing to have a face. Tabs: Workspaces, Shortcuts, Displays, Key
-  Modifications, Floating Apps, General (launch at login; the show/hide
+  Modifications, Apps (`AppRulesTab`: floating apps and per-window apps, the
+  two lists of exceptions to "a workspace is a list of apps"; six tabs is what
+  fits the window's width), General (launch at login; the show/hide
   switches; an icon grid over `MenuBarIcon.available` split by family with a
   heading each; a preview that mirrors the same fallback the status item uses —
   it draws the same flattened `NSImage`s the menu does rather than

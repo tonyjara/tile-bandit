@@ -90,6 +90,8 @@ private func menuSymbol(_ names: String...) -> NSImage {
     func menuHideUnassigned()
     func menuApplyLayout()
     func menuMaximizeWindow()
+    func menuMoveWindow(_ sender: NSMenuItem)
+    func menuReleaseWindows()
     func menuToggleKeyModifications()
     func menuToggleCaffeinate()
     func menuOpenSettings()
@@ -280,6 +282,41 @@ struct StatusMenu {
             shortcut: store.config.hideUnassignedShortcut,
             to: menu
         )
+        // Only once an app is per-window: nobody else has a use for them.
+        if !store.config.perWindowApps.isEmpty {
+            menu.addItem(moveWindowItem())
+            let release = add(
+                "Bring Parked Windows Back",
+                #selector(StatusMenuActions.menuReleaseWindows),
+                symbol: "arrow.uturn.backward",
+                shortcut: nil,
+                to: menu
+            )
+            release.toolTip = "Windows of per-window apps waiting in a corner return to where they were, until the next switch"
+        }
+    }
+
+    /// Sends the focused window of a per-window app to live in a workspace.
+    private func moveWindowItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Move Window to", action: nil, keyEquivalent: "")
+        item.image = menuSymbol("rectangle.portrait.and.arrow.right", "arrow.right.square")
+        let submenu = NSMenu()
+        for workspace in store.workspaces {
+            let entry = NSMenuItem(
+                title: workspace.name,
+                action: #selector(StatusMenuActions.menuMoveWindow(_:)),
+                keyEquivalent: ""
+            )
+            entry.target = target
+            entry.representedObject = workspace.id
+            if workspace.id == activeWorkspaceID { entry.state = .on }
+            if let shortcut = store.config.moveWindowShortcut(for: workspace, among: store.workspaces) {
+                Self.applyKeyEquivalent(shortcut, to: entry)
+            }
+            submenu.addItem(entry)
+        }
+        item.submenu = submenu
+        return item
     }
 
     private func addSetup(to menu: NSMenu) {

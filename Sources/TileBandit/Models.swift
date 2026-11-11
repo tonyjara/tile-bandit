@@ -570,9 +570,9 @@ enum MenuBarIcon: String, Codable, CaseIterable, Identifiable {
 struct Config: Codable, Equatable {
     /// 1 = flat `workspaces` list; 2 = workspaces nested inside display
     /// profiles; 3 = one grid per display inside a workspace; 4 = per-keyboard
-    /// key modifications. Reading an older file migrates it (see `init(from:)`
-    /// here and in Workspace/DisplayProfile).
-    static let currentVersion = 4
+    /// key modifications; 5 = per-window apps. Reading an older file migrates
+    /// it (see `init(from:)` here and in Workspace/DisplayProfile).
+    static let currentVersion = 5
 
     var version: Int
     /// One entry per display setup. Workspaces live inside a profile, so the
@@ -581,6 +581,15 @@ struct Config: Codable, Equatable {
     /// 27" and not on a 14".
     var profiles: [DisplayProfile]
     var floatingApps: [AppRef]
+    /// Apps whose windows each live in one workspace, instead of the whole app
+    /// being in or out. Opt-in, and empty unless the user adds one: it needs
+    /// the Accessibility permission and moves windows during a switch, which
+    /// nothing else does. Global like `floatingApps`; which window lives where
+    /// is state, not configuration, and is kept elsewhere (WindowScope).
+    var perWindowApps: [AppRef]
+    /// ⇧ added to a workspace's shortcut sends the focused window of a
+    /// per-window app there. Only registered while `perWindowApps` has an app.
+    var moveWindowShortcuts: Bool
     var hideUnassignedShortcut: Shortcut?
     var applyLayoutShortcut: Shortcut?
     /// Hold to fill the screen with the focused window, release to put it
@@ -629,6 +638,7 @@ struct Config: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case version, profiles, floatingApps, hideUnassignedShortcut, applyLayoutShortcut
+        case perWindowApps, moveWindowShortcuts
         case maximizeHoldShortcut, maximizeShortcut
         case nextWorkspaceShortcut, previousWorkspaceShortcut
         case openSettingsShortcut, reloadConfigShortcut, caffeinateShortcut, snap
@@ -642,6 +652,8 @@ struct Config: Codable, Equatable {
         version: Int = Config.currentVersion,
         profiles: [DisplayProfile] = [],
         floatingApps: [AppRef] = [],
+        perWindowApps: [AppRef] = [],
+        moveWindowShortcuts: Bool = true,
         hideUnassignedShortcut: Shortcut? = Shortcut(key: "0"),
         applyLayoutShortcut: Shortcut? = Shortcut(key: "l"),
         maximizeHoldShortcut: Shortcut? = Shortcut(key: "m"),
@@ -664,6 +676,8 @@ struct Config: Codable, Equatable {
         self.version = version
         self.profiles = profiles
         self.floatingApps = floatingApps
+        self.perWindowApps = perWindowApps
+        self.moveWindowShortcuts = moveWindowShortcuts
         self.hideUnassignedShortcut = hideUnassignedShortcut
         self.applyLayoutShortcut = applyLayoutShortcut
         self.maximizeHoldShortcut = maximizeHoldShortcut
@@ -700,6 +714,10 @@ struct Config: Codable, Equatable {
             profiles = [DisplayProfile(name: "Default", workspaces: legacy)]
         }
         floatingApps = try container.decodeIfPresent([AppRef].self, forKey: .floatingApps) ?? []
+        // A v4 file has neither key: no app is scoped by window, which is
+        // exactly how it behaved.
+        perWindowApps = try container.decodeIfPresent([AppRef].self, forKey: .perWindowApps) ?? []
+        moveWindowShortcuts = try container.decodeIfPresent(Bool.self, forKey: .moveWindowShortcuts) ?? true
         // Absent key -> default (also upgrades older configs). Explicit
         // null means the user chose "None", so keep it nil.
         hideUnassignedShortcut = try Self.shortcut(in: container, key: .hideUnassignedShortcut, default: Shortcut(key: "0"))
@@ -736,6 +754,8 @@ struct Config: Codable, Equatable {
         try container.encode(version, forKey: .version)
         try container.encode(profiles, forKey: .profiles)
         try container.encode(floatingApps, forKey: .floatingApps)
+        try container.encode(perWindowApps, forKey: .perWindowApps)
+        try container.encode(moveWindowShortcuts, forKey: .moveWindowShortcuts)
         // Encoded explicitly (null for "None") so reloads don't resurrect the defaults.
         try container.encode(hideUnassignedShortcut, forKey: .hideUnassignedShortcut)
         try container.encode(applyLayoutShortcut, forKey: .applyLayoutShortcut)
@@ -755,6 +775,35 @@ struct Config: Codable, Equatable {
         try container.encode(keyboards, forKey: .keyboards)
         try container.encode(keyModifications, forKey: .keyModifications)
         try container.encode(chords, forKey: .chords)
+    }
+}
+
+extension Config {
+    /// Every shortcut the config assigns besides the workspaces' own.
+    var actionShortcuts: [Shortcut] {
+        [
+            hideUnassignedShortcut, applyLayoutShortcut, maximizeHoldShortcut, maximizeShortcut,
+            nextWorkspaceShortcut, previousWorkspaceShortcut, openSettingsShortcut, reloadConfigShortcut,
+            caffeinateShortcut,
+        ].compactMap { $0 }
+    }
+
+    /// The shortcut that sends the focused window of a per-window app to
+    /// `workspace`: the workspace's own with ⇧ added, the way tiling window
+    /// managers pair "go to 2" with "send to 2".
+    ///
+    /// Derived rather than stored, so it follows the workspace's shortcut and
+    /// costs nobody a key until they opt an app in. None when the workspace
+    /// has no shortcut, when its shortcut already uses ⇧, or when the result is
+    /// taken (⌥M's would be ⌥⇧M, which maximises by default) — the menu's
+    /// Move Window to ▸ is always there.
+    func moveWindowShortcut(for workspace: Workspace, among workspaces: [Workspace]) -> Shortcut? {
+        guard moveWindowShortcuts, !perWindowApps.isEmpty,
+              var shortcut = workspace.shortcut, !shortcut.shift
+        else { return nil }
+        shortcut.shift = true
+        let taken = actionShortcuts + workspaces.compactMap(\.shortcut)
+        return taken.contains(shortcut) ? nil : shortcut
     }
 }
 

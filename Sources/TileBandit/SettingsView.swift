@@ -44,8 +44,8 @@ struct SettingsView: View {
                 .tabItem { Text("Displays") }
             KeyModificationsTab(store: store, keyboards: keyboards, debugger: keyDebugger, capture: keyCapture)
                 .tabItem { Text("Key Modifications") }
-            FloatingAppsTab(store: store)
-                .tabItem { Text("Floating Apps") }
+            AppRulesTab(store: store)
+                .tabItem { Text("Apps") }
             GeneralTab(store: store)
                 .tabItem { Text("General") }
         }
@@ -1434,16 +1434,47 @@ struct DisplaysTab: View {
     }
 }
 
-// MARK: - Floating apps
+// MARK: - Apps that don't follow the app-per-workspace rule
 
-struct FloatingAppsTab: View {
+/// The two lists of exceptions: apps that are in every workspace, and apps
+/// whose windows are filed one by one.
+struct AppRulesTab: View {
     @ObservedObject var store: ConfigStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Floating apps")
+                .font(.headline)
             Text("Floating apps stay visible in every workspace — they are never hidden.")
                 .foregroundStyle(.secondary)
             AppListEditor(apps: $store.config.floatingApps)
+
+            Divider()
+
+            Text("Per-window apps")
+                .font(.headline)
+            Text(
+                "Each window of these apps lives in one workspace: the one it was opened in, until you send it to "
+                    + "another (Move Window to in the menu). In the other workspaces it waits in a corner of its "
+                    + "display, where macOS keeps a small piece of it showing. For an app you keep one window of "
+                    + "per task, like a browser."
+            )
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            Toggle(
+                "⇧ with a workspace's shortcut sends the focused window there",
+                isOn: $store.config.moveWindowShortcuts
+            )
+            if !store.config.perWindowApps.isEmpty, !AccessibilityPermission.isGranted {
+                HStack {
+                    Text("Moving windows needs the Accessibility permission. Until it is granted these apps are switched whole, like any other.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Spacer()
+                    Button("Grant…") { AccessibilityPermission.requestAndOpenSettings() }
+                }
+            }
+            AppListEditor(apps: $store.config.perWindowApps)
         }
         .padding(16)
     }

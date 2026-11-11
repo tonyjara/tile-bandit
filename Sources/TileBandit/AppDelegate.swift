@@ -109,6 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registerHotkeys()
         rebuildMenu()
         snap.refresh()
+        engine.configChanged()
         keyMods.apply(config: store.config, attached: keyboards.attached)
         LoginItem.reconcile(enabled: store.config.launchAtLogin)
     }
@@ -128,6 +129,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// carrier key with nothing left to interpret it would be a dead key. So
     /// quitting hands every keyboard back unmodified.
     func applicationWillTerminate(_ notification: Notification) {
+        // The other thing left on the machine: windows of per-window apps
+        // parked in a corner. They go back where they were.
+        engine.shutDown()
         keyMods.shutDown()
         // The assertions would die with the process anyway; releasing them
         // here just makes it explicit.
@@ -147,6 +151,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.keyDebugger.recordHotkeyFired(shortcut, action: "Switch to \(name)")
                 self.engine.switchTo(id)
+            }
+            // Only exists once an app is per-window (Config.moveWindowShortcut).
+            if let move = store.config.moveWindowShortcut(for: workspace, among: store.workspaces) {
+                hotkeys.register(move) { [weak self] in
+                    guard let self else { return }
+                    self.keyDebugger.recordHotkeyFired(move, action: "Move window to \(name)")
+                    self.engine.moveFocusedWindow(to: id)
+                }
             }
         }
         if let shortcut = store.config.hideUnassignedShortcut {
@@ -269,7 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func applyActiveLayout() {
         guard let workspace = engine.activeWorkspace else { return }
-        LayoutEngine.apply(workspace)
+        LayoutEngine.apply(workspace, skipping: engine.windowsLivingElsewhere)
     }
 
     private func reloadConfig() {
@@ -372,6 +384,15 @@ extension AppDelegate: StatusMenuActions {
     /// item on purpose — a menu can't express "while held".
     @objc func menuMaximizeWindow() {
         maximizeHold.stick(on: frontmostWhenMenuOpened)
+    }
+
+    @objc func menuMoveWindow(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID else { return }
+        engine.moveFocusedWindow(to: id, of: frontmostWhenMenuOpened)
+    }
+
+    @objc func menuReleaseWindows() {
+        engine.releaseParkedWindows()
     }
 
     /// The master switch, reachable without the keyboard — which is the whole

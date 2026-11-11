@@ -4,6 +4,31 @@ Notable changes, newest first. Versions follow the number in
 `Resources/Info.plist`, which is what `make app` stamps into the bundle and what
 the Homebrew cask points at.
 
+## Unreleased
+
+### Added
+
+- **Per-window apps.** For an app you keep one window of per task, such as a
+  browser: add it under Settings → Apps and each of its windows lives in one
+  workspace instead of showing in every workspace that lists the app. A window
+  belongs to the workspace it was opened in; Move Window to ▸ in the menu, or ⇧
+  with a workspace's shortcut, sends the focused one elsewhere. Focusing a
+  window that lives in another workspace (Cmd-`, Mission Control) takes you
+  there. Since macOS cannot hide a single window, the ones that live elsewhere
+  wait in a bottom corner of their display, with a 1 × 32 pt sliver showing,
+  and return to where they were. Off unless you add an app, and it needs the
+  Accessibility permission. Windows are put back when Tile Bandit quits, and
+  Bring Parked Windows Back in the menu does it on demand. The assessment
+  behind it is `docs/plans/per-window-workspaces.md`.
+- The log has a `window` category: what was parked and brought back at each
+  switch, which workspace took which window, and every move that did not take.
+
+### Changed
+
+- Settings: the Floating Apps tab is now Apps, and holds both lists.
+- The config is version 5 (`perWindowApps`, `moveWindowShortcuts`). Older files
+  are read as before.
+
 ## 1.6.0
 
 ### Changed

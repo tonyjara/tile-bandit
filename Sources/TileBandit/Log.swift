@@ -23,6 +23,9 @@ enum Log {
     static let display = Logger(subsystem: subsystem, category: "display")
     static let hotkey = Logger(subsystem: subsystem, category: "hotkey")
     static let ax = Logger(subsystem: subsystem, category: "ax")
+    /// Per-window workspaces: what was parked and shown, which workspace took
+    /// which window, and every move that did not take.
+    static let windows = Logger(subsystem: subsystem, category: "window")
 }
 
 extension Logger {

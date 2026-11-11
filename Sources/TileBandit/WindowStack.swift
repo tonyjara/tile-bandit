@@ -36,6 +36,23 @@ enum WindowList {
     }
 }
 
+extension WindowList {
+    /// Every window there is, with its owner: hidden apps, minimised windows
+    /// and other Spaces included. For asking "does this window still exist?",
+    /// which the on-screen list cannot answer. Permission-free like the rest.
+    static func everyOwner() -> [CGWindowID: pid_t] {
+        guard let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return [:] }
+        var owners: [CGWindowID: pid_t] = [:]
+        for entry in list {
+            guard let number = entry[kCGWindowNumber as String] as? Int,
+                  let pid = entry[kCGWindowOwnerPID as String] as? Int
+            else { continue }
+            owners[CGWindowID(number)] = pid_t(pid)
+        }
+        return owners
+    }
+}
+
 /// How a workspace was when it was left: its windows front to back, and the
 /// app that had focus.
 ///

@@ -38,6 +38,10 @@ With the Accessibility permission that memory is per window (one browser window
 on top here, another there); without it, per app.
 Window *tiling* exists too, but only ever when you ask for it.
 
+For an app you keep one window of per task — a browser, say — there is an
+opt-in the other way round: [per-window apps](#per-window-apps), where each
+*window* lives in one workspace.
+
 Workspaces are grouped by **display profile**: the laptop on its own, the
 laptop plus a monitor, the lid closed on a big display — each setup gets its
 own workspaces, its own shortcuts and its own grids, and Tile Bandit switches
@@ -105,6 +109,7 @@ Most of Tile Bandit needs nothing at all. Two features do:
 | Feature | Needs | Why |
 | --- | --- | --- |
 | Apply Grid Layout, drag-snap | Accessibility | Moving another app's windows is an Accessibility API |
+| Per-window apps | Accessibility | The same: a window that lives elsewhere is moved out of the way |
 | Dual-role keys, chords | Accessibility | They run on a `CGEventTap` |
 | Everything else | — | Hiding apps, hotkeys, display detection, plain key remaps |
 
@@ -119,6 +124,7 @@ Defaults, all reassignable in Settings → Shortcuts:
 | | |
 | --- | --- |
 | `⌥1` … `⌥9` | Switch to workspace 1–9 |
+| `⌥⇧1` … `⌥⇧9` | Send the focused window to workspace 1–9 (per-window apps only) |
 | `⌥P` / `⌥N` | Next / previous workspace |
 | `⌥0` | Hide unassigned apps |
 | `⌥L` | Apply grid layout |
@@ -180,6 +186,47 @@ a window and you get the grid belonging to the screen you're over, switching as
 you cross onto another one. The highlight is the single cell under the cursor;
 hold `⇧` as well to span from where you pressed it. A display the workspace has
 nothing laid out on falls back to the default dimensions in Settings.
+
+## Per-window apps
+
+Workspaces hold apps, and an app in two workspaces shows all its windows in
+both. For most apps that is what you want. For a browser with one window for
+chat and another for code it isn't: you get both windows everywhere.
+
+Add such an app under Settings → **Apps** → Per-window apps and each of its
+windows lives in **one** workspace:
+
+- A window belongs to the workspace it was opened in. (Exactly: a window with
+  no home yet shows wherever its app does, and the workspace you leave it in
+  takes it.)
+- **Move Window to ▸** in the menu, or `⇧` with a workspace's shortcut, sends
+  the focused window to another workspace. The window goes; you stay.
+- Focusing a window that lives elsewhere — Cmd-`, Mission Control, a link that
+  opens in it — takes you to its workspace, like follow-focus does for apps.
+- Apply Grid Layout leaves the windows of other workspaces alone.
+
+macOS has no way to hide one window of an app, so a window that lives elsewhere
+is **parked**: moved to a bottom corner of its display, where the system keeps
+a sliver of it showing (1 × 32 pt), and moved back to where it was when you
+return. No animation, nothing in the Dock. This is the one case where a switch
+moves windows, and only for the apps you list here.
+
+Things to know:
+
+- It needs the Accessibility permission. Without it a per-window app is
+  switched whole, like any other.
+- The app still has to be listed in each workspace where its windows may live.
+- A window is recognised for as long as it stays open, through tabs, titles and
+  Tile Bandit restarting. When the *app* restarts, its windows are matched
+  again by title and frame; a window that can't be told apart is treated as new.
+- Right after you opt an app in, no window has a home, so the first workspace
+  you leave takes all the ones on screen. Send each where it belongs first.
+- Tile Bandit puts every parked window back when it quits. **Bring Parked
+  Windows Back** in the menu does it on demand.
+- Windows in native full screen and minimised windows are left alone.
+
+Which window lives where is kept in `~/.config/tilebandit/windows.json`, by
+window id. No title is stored, only a digest to compare.
 
 ## Key modifications
 
@@ -257,7 +304,7 @@ throwing the file out.
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "profiles": [
     {
       "id": "9C2A1B44-0000-4000-8000-000000000001",
@@ -289,6 +336,10 @@ throwing the file out.
     }
   ],
   "floatingApps": [],
+  "perWindowApps": [
+    { "bundleId": "com.example.browser", "name": "Browser" }
+  ],
+  "moveWindowShortcuts": true,
   "keyboards": [],
   "chords": [],
   "menuBarIcon": "bandit.cactus",
@@ -307,6 +358,10 @@ throwing the file out.
   no entry.
 - Apps in **Floating Apps** are visible in every workspace and are never hidden
   by a switch.
+- Apps in `perWindowApps` have each window live in one workspace — see
+  [Per-window apps](#per-window-apps). Empty by default. `moveWindowShortcuts`
+  (default on) is the `⇧` + workspace shortcut that sends a window, registered
+  only while the list has an app.
 - `launchAtLogin` (default on) and `hideMenuBarIcon` (default off) are the two
   switches on the General tab.
 - `followFocusedApp` (default on): focusing an app that belongs to another
@@ -317,7 +372,8 @@ throwing the file out.
 Older configs are migrated on read and written back in the current shape on the
 next save; nothing is lost. `version: 1` (a flat `workspaces` list) becomes a
 profile bound to whatever is attached, and `version: 2`'s single grid per
-workspace is copied onto every display in its profile.
+workspace is copied onto every display in its profile. Versions 3 and 4 only
+lack keys added since (key modifications, per-window apps), which read as none.
 
 ## Development
 
