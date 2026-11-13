@@ -778,6 +778,22 @@ struct Config: Codable, Equatable {
     }
 }
 
+extension Array where Element == Workspace {
+    /// Moves one workspace a step up (`by: -1`) or down (`by: 1`) the list —
+    /// the keyboard route to what dragging a row does in Settings. Returns
+    /// false, changing nothing, when there's no such workspace or it is
+    /// already at that end. The order is everything that follows it: the menu,
+    /// next/previous; a workspace's own shortcut stays with the workspace.
+    @discardableResult
+    mutating func move(_ id: UUID, by step: Int) -> Bool {
+        guard let from = firstIndex(where: { $0.id == id }) else { return false }
+        let to = from + step
+        guard indices.contains(to) else { return false }
+        swapAt(from, to)
+        return true
+    }
+}
+
 extension Config {
     /// Every shortcut the config assigns besides the workspaces' own.
     var actionShortcuts: [Shortcut] {

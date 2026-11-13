@@ -134,6 +134,12 @@ Defaults, all reassignable in Settings → Shortcuts:
 | `⌥R` | Reload config |
 | `⌃⌥` + drag | Snap a window to the grid (add `⇧` to span cells) |
 
+A workspace's shortcut belongs to the workspace, not to its place in the list:
+`⌥1` … `⌥9` are handed out in order as workspaces are created, and reordering
+them (drag a row in Settings → Workspaces, or select it and press `⌥⌘↑` / `⌥⌘↓`)
+changes the menu and what next / previous cycle through, never which key
+goes where.
+
 Shortcuts need at least one modifier — a bare key would swallow normal typing
 system-wide.
 

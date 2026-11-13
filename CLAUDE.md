@@ -639,6 +639,13 @@ natively, so any editor that speaks it works).
   and the unbound grid when the profile is bound to none — tracked as a *key*
   rather than an index so a profile gaining or losing a monitor can't point it
   at the wrong grid.
+  The workspace list reorders by dragging a row (List's own `.onMove`, which
+  draws the insertion line; a grip glyph says the row drags) or, from the
+  keyboard, the selected row's ⌥⌘↑/⌥⌘↓ buttons (`[Workspace].move(_:by:)`,
+  covered by `WorkspaceOrderTests`). Plain arrows move the selection and
+  ⌘↑/↓ belong to the Name field, hence ⌥⌘. Order is what the menu and
+  next/previous follow; a workspace's shortcut is stored on it, so moving one
+  never changes which key reaches it.
   The Displays tab shows what's attached (with the keys detection uses), which
   profile matched, and per-profile rename / duplicate / bind-to-attached /
   delete. Binding a profile unbinds any other holding the same fingerprint —

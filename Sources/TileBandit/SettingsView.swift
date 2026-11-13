@@ -195,9 +195,16 @@ struct WorkspaceListPane: View {
     var body: some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
+                // Drag a row to reorder: List's own move gives the insertion
+                // line between rows. The row holds no controls, so the whole
+                // of it drags; the grip is there to say it can.
                 List(selection: stickySelection) {
                     ForEach(workspaces) { workspace in
-                        HStack {
+                        HStack(spacing: 6) {
+                            Image(systemName: "line.3.horizontal")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .help("Drag to reorder")
                             Text(workspace.name)
                             Spacer()
                             if let shortcut = workspace.shortcut {
@@ -207,13 +214,28 @@ struct WorkspaceListPane: View {
                         }
                         .tag(workspace.id)
                     }
+                    .onMove { source, destination in
+                        workspaces.move(fromOffsets: source, toOffset: destination)
+                    }
                 }
                 Divider()
                 HStack(spacing: 8) {
                     Button(action: addWorkspace) { Image(systemName: "plus") }
+                        .help("Add a workspace")
                     Button(action: removeSelected) { Image(systemName: "minus") }
                         .disabled(selection == nil)
+                        .help("Remove the selected workspace")
                     Spacer()
+                    // ⌥⌘↑/↓ rather than plain arrows: those move the list's
+                    // selection, and ⌘↑/↓ jump to the ends of a text field.
+                    Button { moveSelected(by: -1) } label: { Image(systemName: "chevron.up") }
+                        .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                        .disabled(!canMoveSelected(by: -1))
+                        .help("Move up (⌥⌘↑)")
+                    Button { moveSelected(by: 1) } label: { Image(systemName: "chevron.down") }
+                        .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                        .disabled(!canMoveSelected(by: 1))
+                        .help("Move down (⌥⌘↓)")
                 }
                 .buttonStyle(.borderless)
                 .padding(6)
@@ -270,6 +292,16 @@ struct WorkspaceListPane: View {
     private func removeSelected() {
         workspaces.removeAll { $0.id == selection }
         selection = workspaces.first?.id
+    }
+
+    private func canMoveSelected(by step: Int) -> Bool {
+        guard let index = workspaces.firstIndex(where: { $0.id == selection }) else { return false }
+        return workspaces.indices.contains(index + step)
+    }
+
+    private func moveSelected(by step: Int) {
+        guard let selection else { return }
+        workspaces.move(selection, by: step)
     }
 }
 
