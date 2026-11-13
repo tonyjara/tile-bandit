@@ -4,7 +4,7 @@ Notable changes, newest first. Versions follow the number in
 `Resources/Info.plist`, which is what `make app` stamps into the bundle and what
 the Homebrew cask points at.
 
-## Unreleased
+## 1.7.0
 
 ### Added
 
@@ -22,6 +22,10 @@ the Homebrew cask points at.
   behind it is `docs/plans/per-window-workspaces.md`.
 - The log has a `window` category: what was parked and brought back at each
   switch, which workspace took which window, and every move that did not take.
+- **Reorder workspaces in Settings.** Drag a workspace up or down the list in
+  Settings → Workspaces, or select it and press ⌥⌘↑ / ⌥⌘↓. The new order is
+  the one the menu shows and next / previous cycle through. Each workspace
+  keeps its own shortcut, so moving one never changes which key opens it.
 
 ### Changed
 
