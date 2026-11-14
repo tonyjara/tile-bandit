@@ -4,6 +4,18 @@ Notable changes, newest first. Versions follow the number in
 `Resources/Info.plist`, which is what `make app` stamps into the bundle and what
 the Homebrew cask points at.
 
+## 1.7.1
+
+### Fixed
+
+- **A workspace that read as empty when its app has no Dock icon.** An app
+  that drops its Dock icon while only a panel of it is up (an accessory app)
+  was not counted as running, so switching to a workspace listing it showed
+  and focused nothing, and the app in front from the previous workspace stayed
+  over it. A switch now manages an accessory app when a workspace of the
+  connected display setup lists it. Menu bar utilities no workspace lists are
+  still left alone.
+
 ## 1.7.0
 
 ### Added
