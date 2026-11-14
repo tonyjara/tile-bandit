@@ -261,7 +261,13 @@ natively, so any editor that speaks it works).
   in front is left alone when the switch moved focus elsewhere, since it can
   only have been brought back since. Apps with no bundle identifier (anything
   windowed started from a terminal) are hidden like any other; they used to be
-  skipped.
+  skipped. **Which apps a switch manages** is `isManaged`: every `.regular`
+  app, plus an `.accessory` one when a workspace of the live setup lists it.
+  Kururu drops to accessory while only its floating panel is up, and a
+  `.regular`-only filter made K look empty: nothing took focus, and the app
+  that was in front (macOS won't hide the active app with nothing to replace
+  it) stayed over K as a `LEFTOVER` until the checks gave up. Unlisted
+  accessory apps (menu-bar utilities) are never touched.
   **The order** is restored in the first pass, once the apps are back, moving
   as few windows as it takes (`StackPlan.raisesNeeded`; usually none, since
   apps hidden together return in the order they left). With the Accessibility

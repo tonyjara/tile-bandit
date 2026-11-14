@@ -4,10 +4,11 @@ import AppKit
 ///
 /// Core invariant (this is the whole trick): switching never moves a window.
 /// A switch unhides the target workspace's apps, hides every other regular
-/// app, and puts the workspace back the way it was left — the same app in
-/// front, and its windows in the same order front to back. An app assigned to
-/// both the current and the target workspace (or listed as floating) is never
-/// hidden, so it keeps its exact position; only its place in the stack changes.
+/// app (and any accessory app a workspace lists), and puts the workspace back
+/// the way it was left — the same app in front, and its windows in the same
+/// order front to back. An app assigned to both the current and the target
+/// workspace (or listed as floating) is never hidden, so it keeps its exact
+/// position; only its place in the stack changes.
 ///
 /// The one exception is asked for app by app: for the apps in
 /// `Config.perWindowApps` a *window* lives in one workspace, and since macOS
@@ -167,7 +168,7 @@ final class WorkspaceEngine {
         // workspace being left is on screen as the user had it.
         let leaving = activeWorkspace
         let frontBefore = NSWorkspace.shared.frontmostApplication
-        let running = regularRunningApps()
+        let running = managedRunningApps()
         // Per-window apps: one reading of their windows serves both ends of
         // the switch. Nil for everyone who has not opted an app in.
         let scan = scope.isOn ? scope.scan(running) : nil
@@ -299,7 +300,7 @@ final class WorkspaceEngine {
     func hideUnassignedApps() {
         guard !store.workspaces.isEmpty else { return }
 
-        let running = regularRunningApps()
+        let running = managedRunningApps()
         let active = activeWorkspace
         let allowed: Set<String>
         if let active {
@@ -385,7 +386,7 @@ final class WorkspaceEngine {
         let stack = snapshots[active.id]?.stack.map(\.window) ?? []
         if scope.putHomeWindowForward(of: app, in: active, preferring: stack) { return }
         let allowed = Set(active.apps.map(\.bundleId)).union(floatingIDs())
-        let running = regularRunningApps()
+        let running = managedRunningApps()
         let next = WindowList.onScreen().lazy
             .filter { $0.pid != app.processIdentifier }
             .compactMap { window in running.first { $0.processIdentifier == window.pid } }
@@ -439,7 +440,7 @@ final class WorkspaceEngine {
         }
         let members = Set(workspace.apps.map(\.bundleId)).union(floatingIDs())
         var bundleOf: [pid_t: String] = [:]
-        for app in regularRunningApps() {
+        for app in managedRunningApps() {
             if let bundleId = app.bundleIdentifier { bundleOf[app.processIdentifier] = bundleId }
         }
         let onScreen = WindowList.onScreen().compactMap { window -> WorkspaceSnapshot.Entry? in
@@ -630,7 +631,7 @@ final class WorkspaceEngine {
     private func runPass(_ plan: Plan, index: Int) {
         guard plan.seq == switchSeq else { return }
 
-        let running = regularRunningApps()
+        let running = managedRunningApps()
         let everyWindow = WindowList.onScreen()
         let drawn = Set(everyWindow.map(\.pid))
         let front = NSWorkspace.shared.frontmostApplication
@@ -850,8 +851,33 @@ final class WorkspaceEngine {
 
     // MARK: - Helpers
 
-    private func regularRunningApps() -> [NSRunningApplication] {
-        NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
+    /// The apps a switch shows, hides and focuses: every regular app, plus an
+    /// accessory app when a workspace of this setup lists it.
+    private func managedRunningApps() -> [NSRunningApplication] {
+        let listed = Set(store.workspaces.flatMap { $0.apps.map(\.bundleId) }).union(floatingIDs())
+        return NSWorkspace.shared.runningApplications.filter {
+            Self.isManaged(policy: $0.activationPolicy, bundleId: $0.bundleIdentifier, listed: listed)
+        }
+    }
+
+    /// Whether a switch takes charge of an app with this activation policy.
+    ///
+    /// Regular apps always. An *accessory* app only when a workspace lists it:
+    /// some apps drop their Dock icon (become accessory) while only a panel of
+    /// theirs is up, and are still the app the workspace is for. Kururu does
+    /// that when its main window closes and its floating panel stays. Filtering
+    /// on `.regular` alone made the workspace look empty ("none of its apps is
+    /// running"), so nothing took focus, and the app in front (macOS won't hide
+    /// the active app while nothing replaces it) stayed on screen through every
+    /// check. An accessory app nobody listed (a menu bar utility) is left alone:
+    /// hiding it would close its menus and popovers. A prohibited (background
+    /// only) app has nothing to show or hide.
+    static func isManaged(policy: NSApplication.ActivationPolicy, bundleId: String?, listed: Set<String>) -> Bool {
+        switch policy {
+        case .regular: return true
+        case .accessory: return bundleId.map(listed.contains) ?? false
+        default: return false
+        }
     }
 
     private func floatingIDs() -> Set<String> {
