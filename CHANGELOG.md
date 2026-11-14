@@ -15,6 +15,11 @@ the Homebrew cask points at.
   over it. A switch now manages an accessory app when a workspace of the
   connected display setup lists it. Menu bar utilities no workspace lists are
   still left alone.
+- **Switching to a workspace with none of its apps running left the previous
+  app on screen.** With nothing of the workspace's own to focus, the app in
+  front could not hide (macOS keeps the active app up while nothing replaces
+  it). Tile Bandit now takes focus itself, so the workspace shows just the
+  desktop. Floating panels and menu bar utilities are left as they were.
 
 ## 1.7.0
 

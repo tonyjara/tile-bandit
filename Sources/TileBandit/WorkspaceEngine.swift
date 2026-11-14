@@ -211,6 +211,14 @@ final class WorkspaceEngine {
         if let focus, pulled == nil {
             bringForward(focus, snapshot: snapshot, byWindow: byWindow)
         }
+        // Nothing of this workspace's to focus, and the app in front is on its
+        // way out: take focus ourselves, or it stays up (`takesFocusItself`).
+        let standIn = Self.takesFocusItself(
+            focusTarget: focus?.processIdentifier,
+            frontmost: frontBefore?.processIdentifier,
+            asked: asked
+        )
+        if standIn { activateSelf() }
 
         activeWorkspaceID = id
         switchedAt = Date()
@@ -223,7 +231,7 @@ final class WorkspaceEngine {
         Log.switching.line(
             "#\(switchSeq) \(trigger.rawValue): \(leaving?.name ?? "none") → \(workspace.name)"
                 + " | in front before: \(label(frontBefore))"
-                + " | focus: \(focus.map { label($0) } ?? "nothing") (\(why))"
+                + " | focus: \(focus.map { label($0) } ?? (standIn ? "Tile Bandit, so the desktop is left" : "nothing")) (\(why))"
                 + " | asked \(shown) to show, \(asked.count) to hide"
                 + " | order restored by \(byWindow ? "window" : "app (no Accessibility grant)")"
                 + (arranged.map { " | per-window apps: \($0.summary)" } ?? "")
@@ -240,6 +248,7 @@ final class WorkspaceEngine {
             asked: asked,
             frontBefore: frontBefore?.processIdentifier,
             movedFocus: focus != nil,
+            standIn: standIn,
             restore: Restore(remembered: snapshot, focus: focus, pulled: pulled != nil)
         ), index: 0)
     }
@@ -323,15 +332,23 @@ final class WorkspaceEngine {
 
         // Only steal focus if the app the user was in just got hidden.
         var focus: NSRunningApplication?
+        var standIn = false
         if let active, let frontmost, !mayStay(frontmost, allowed: allowed) {
             focus = focusTarget(for: active, snapshot: snapshots[active.id], pulled: nil, in: running).app
             if let focus { activate(focus, allWindows: !AccessibilityPermission.isGranted) }
+            // The active workspace has nothing running: as for a switch to it.
+            standIn = Self.takesFocusItself(
+                focusTarget: focus?.processIdentifier,
+                frontmost: frontmost.processIdentifier,
+                asked: asked
+            )
+            if standIn { activateSelf() }
         }
 
         Log.switching.line(
             "#\(switchSeq) clean up: keeping \(active.map { "workspace \($0.name)" } ?? "every workspace's apps")"
                 + " | asked \(asked.count) to hide"
-                + (focus.map { " | focus: \(label($0))" } ?? "")
+                + (focus.map { " | focus: \(label($0))" } ?? (standIn ? " | focus: Tile Bandit, so the desktop is left" : ""))
         )
         schedulePass(Plan(
             seq: switchSeq,
@@ -342,6 +359,7 @@ final class WorkspaceEngine {
             asked: asked,
             frontBefore: frontmost?.processIdentifier,
             movedFocus: focus != nil,
+            standIn: standIn,
             restore: nil
         ), index: 0)
     }
@@ -613,6 +631,11 @@ final class WorkspaceEngine {
         /// The app in front before, and whether focus was moved off it.
         let frontBefore: pid_t?
         let movedFocus: Bool
+        /// Tile Bandit took focus itself, the workspace having nothing of its
+        /// own to focus. Deliberately not counted in `movedFocus`: if the app
+        /// that was in front still is, our activation didn't take, and that app
+        /// is a leftover rather than something the user brought back.
+        let standIn: Bool
         /// Nil for a clean-up, which hides and nothing else.
         let restore: Restore?
     }
@@ -657,12 +680,26 @@ final class WorkspaceEngine {
         // Asked to hide and still drawing a window. The app in front is left
         // alone when the switch moved focus elsewhere: it can only be in front
         // now because it was brought back since, and that isn't ours to undo.
-        // (When nothing took focus — a workspace with nothing running — the
-        // app that was in front and still is simply hasn't hidden yet.)
+        // (When Tile Bandit took focus itself — a workspace with nothing
+        // running — the app that was in front and still is simply hasn't
+        // hidden yet: our activation hasn't landed, and it can't hide while it
+        // is the active app. So focus is asked for again before it is.)
         var leftovers: [NSRunningApplication] = []
+        var focusNote = ""
+        if plan.standIn, let front, plan.asked.contains(front.processIdentifier),
+           !mayStay(front, allowed: plan.allowed),
+           !Self.wasBroughtBack(front.processIdentifier, front: front.processIdentifier,
+                                frontBefore: plan.frontBefore, movedFocus: plan.movedFocus) {
+            activateSelf()
+            focusNote = " | Tile Bandit asked again to take focus from \(label(front))"
+        }
         for app in running where plan.asked.contains(app.processIdentifier) && !mayStay(app, allowed: plan.allowed) {
-            let broughtBack = app.processIdentifier == front?.processIdentifier
-                && (plan.movedFocus || plan.frontBefore != app.processIdentifier)
+            let broughtBack = Self.wasBroughtBack(
+                app.processIdentifier,
+                front: front?.processIdentifier,
+                frontBefore: plan.frontBefore,
+                movedFocus: plan.movedFocus
+            )
             if broughtBack { continue }
             if drawn.contains(app.processIdentifier) {
                 leftovers.append(app)
@@ -693,6 +730,7 @@ final class WorkspaceEngine {
         let summary = "#\(plan.seq) check +\(elapsed)s | in front: \(label(front))"
             + " | windows front to back: \(names(visible))"
             + (orderNote.isEmpty ? "" : " | \(orderNote)")
+            + focusNote
             + scopeNote
             + (leftovers.isEmpty ? "" : " | LEFTOVER (asked to hide, still on screen, asked again): \(names(leftovers))")
             + (stillHidden.isEmpty ? "" : " | STILL HIDDEN (asked to show again): \(names(stillHidden))")
@@ -877,6 +915,45 @@ final class WorkspaceEngine {
         case .regular: return true
         case .accessory: return bundleId.map(listed.contains) ?? false
         default: return false
+        }
+    }
+
+    /// Whether Tile Bandit takes focus itself as a switch goes out.
+    ///
+    /// When the workspace has nothing of its own to focus (none of its apps is
+    /// running) and the app in front is being hidden. macOS won't hide the
+    /// active app while nothing replaces it, and every other app is being
+    /// hidden at the same moment, so that app stayed over the empty workspace
+    /// as a LEFTOVER until the checks gave up. Tile Bandit has no window to
+    /// show, so taking focus itself leaves the desktop, which is what an empty
+    /// workspace is.
+    ///
+    /// Only for an app that was asked to hide: when what is in front stays (a
+    /// floating app, Tile Bandit itself) or isn't ours to touch (an unlisted
+    /// menu bar utility with its popover open), focus is left where it is.
+    static func takesFocusItself(focusTarget: pid_t?, frontmost: pid_t?, asked: Set<pid_t>) -> Bool {
+        guard focusTarget == nil, let frontmost else { return false }
+        return asked.contains(frontmost)
+    }
+
+    /// Whether `pid`, asked to hide at a switch and in front now, was brought
+    /// back since by the user rather than never having left. If the switch
+    /// moved focus to one of the workspace's apps, the app can only be in
+    /// front again because someone brought it back; if not, it was brought
+    /// back only when it isn't the app that was in front before.
+    static func wasBroughtBack(_ pid: pid_t, front: pid_t?, frontBefore: pid_t?, movedFocus: Bool) -> Bool {
+        pid == front && (movedFocus || frontBefore != pid)
+    }
+
+    /// Takes focus for Tile Bandit itself. It has no window on screen (bar an
+    /// open Settings window, which is never hidden anyway), so what is left in
+    /// front is the desktop. The same call opening Settings uses, which works
+    /// from a hotkey under macOS 14's cooperative activation.
+    private func activateSelf() {
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 

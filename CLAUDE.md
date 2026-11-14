@@ -268,6 +268,16 @@ natively, so any editor that speaks it works).
   that was in front (macOS won't hide the active app with nothing to replace
   it) stayed over K as a `LEFTOVER` until the checks gave up. Unlisted
   accessory apps (menu-bar utilities) are never touched.
+  **A workspace with nothing running** has nothing to take focus either, so
+  when the app in front is being hidden Tile Bandit takes focus *itself*
+  (`takesFocusItself`, `NSApp.activate()`): it has no window, so the desktop
+  is what's left. Not Finder — activating a hidden Finder brings its windows
+  back. Only when the app in front was asked to hide, so a floating panel or
+  an unmanaged menu-bar utility keeps focus. The stand-in doesn't count as
+  `movedFocus`: if the old app is still in front at a check, our activation
+  didn't land, so it is asked again and the app stays a leftover
+  (`wasBroughtBack`) rather than being taken for the user's doing. Clean up
+  does the same when the active workspace has nothing running.
   **The order** is restored in the first pass, once the apps are back, moving
   as few windows as it takes (`StackPlan.raisesNeeded`; usually none, since
   apps hidden together return in the order they left). With the Accessibility
