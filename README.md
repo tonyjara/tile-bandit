@@ -104,13 +104,14 @@ processes launched from it inherit the grant, so it survives rebuilds.
 
 ## Permissions
 
-Most of Tile Bandit needs nothing at all. Two features do:
+Most of Tile Bandit needs nothing at all. A few features do:
 
 | Feature | Needs | Why |
 | --- | --- | --- |
 | Apply Grid Layout, drag-snap | Accessibility | Moving another app's windows is an Accessibility API |
 | Per-window apps | Accessibility | The same: a window that lives elsewhere is moved out of the way |
 | Dual-role keys, chords | Accessibility | They run on a `CGEventTap` |
+| Stay Awake with Lid Closed | A helper allowed once in Login Items | Only root can stop a Mac sleeping when its lid closes — see [below](#stay-awake-with-the-lid-closed) |
 | Everything else | — | Hiding apps, hotkeys, display detection, plain key remaps |
 
 Plain 1:1 key remaps go through `hidutil` at the HID layer, which needs no
@@ -301,6 +302,59 @@ Login Items — and if you switch it off there, Tile Bandit takes the hint rathe
 than re-registering itself on every launch. Only an installed `.app` can
 register; a `swift run` build says so instead of pretending.
 
+## Stay awake with the lid closed
+
+**Setup ▸ Stay Awake with Lid Closed (on Power)** keeps a MacBook running with
+its lid shut and no display attached — closed-display mode without the display
+— for as long as the charger is in. It is for leaving the Mac working at the
+desk while its monitor goes elsewhere.
+
+- **Only on the charger.** Unplug it and the Mac sleeps as usual; if the lid is
+  shut at that moment, it goes to sleep within a couple of seconds. Plug it back
+  in and the hold resumes (a Mac that went to sleep with its lid shut may want
+  the lid opened to wake it first).
+- **Only while Tile Bandit runs and the toggle is on.** Switch it off, quit, or
+  let Tile Bandit crash, and sleep is back. The toggle is per session: it
+  starts off at every launch.
+- The line under the toggle says what is true right now — on and awake, or on
+  battery and sleeping as usual — read from the system rather than from the
+  checkmark.
+
+**How it works.** Nothing an ordinary app can ask for survives the lid closing.
+What does is `pmset disablesleep`, the same switch other closed-lid tools use
+on Apple silicon, and macOS lets only root flip it. So this one feature has a
+small helper that runs as root, `TileBanditSleepGuard`, inside the app bundle.
+The first time you switch the toggle on, macOS asks you to allow it: System
+Settings ▸ General ▸ Login Items & Extensions ▸ switch on **Tile Bandit** under
+*Allow in the Background*, and confirm with Touch ID or your password. That is
+the only time; the toggle then comes on by itself.
+
+**What the helper can do** is deliberately almost nothing:
+
+- It accepts two messages, neither with an argument: *hold* and *check*. A
+  caller cannot hand it a command, a path or a value.
+- It answers only Tile Bandit, signed by the same team that signed the helper,
+  and checks that signature on every connection.
+- It turns sleep off only while the caller's connection is open **and** the Mac
+  is on the charger, and it watches the charger itself — so even an app that
+  has hung cannot keep a Mac awake on battery.
+- It leaves a note on disk before it switches sleep off. launchd starts the
+  helper at boot and again if it ever dies, and a note found at start with
+  nobody holding means a run that ended badly: sleep is put back before
+  anything else.
+- A `sudo pmset disablesleep 1` you made yourself is left alone, unless you
+  switch the toggle on over it — then it is treated as the toggle's, and goes
+  back to normal with it.
+
+While it is on, the Sleep item in the Apple menu and idle sleep are held off
+too; the display still sleeps on its own schedule, and with the lid shut Tile
+Bandit puts the built-in panel to sleep. To remove the helper, switch Tile
+Bandit off under *Allow in the Background*.
+
+`pmset -g | grep SleepDisabled` shows the switch (the line is there only while
+it is set), and `make log` shows what the app (`power`) and the helper
+(`sleepguard`) did and why.
+
 ## Config
 
 Everything lives in `~/.config/tilebandit/config.json` — hand-editable, then
@@ -391,6 +445,7 @@ understands SPM natively. (Xcode users can still `open Package.swift`.)
 swift run     # dev build + launch; prints the mascot, config path and permission state
 make dev      # auto-rebuild & relaunch on change (needs watchexec)
 make app      # release build → dist/Tile Bandit.app
+make signed   # the same, signed like a release (CODESIGN_ID=…) — what the lid helper needs
 make icon     # re-bake Resources/AppIcon.icns from the drawing in BanditIcons.swift
 make glyphs   # contact sheet of the drawn menu bar glyphs, light and dark
 ```
@@ -408,6 +463,8 @@ Sources/TileBandit/
 ├── StatusMenu.swift         what the menu bar menu looks like
 ├── BanditIcons.swift        the drawn glyph set + the app icon artwork
 ├── LoginItem.swift          launch at login, via SMAppService
+├── Caffeine.swift           Caffeinate: two power assertions, held by the app
+├── LidAwake.swift           Stay Awake with Lid Closed: the app's (thin) end
 ├── UpdateChecker.swift      asks GitHub for the latest release; brew installs it
 ├── Models.swift             Config / DisplayProfile / Workspace / Shortcut (Codable)
 ├── ConfigStore.swift        ObservableObject + debounced JSON autosave
@@ -429,7 +486,16 @@ Sources/TileBandit/
 └── KeyModificationsTab.swift  … and its biggest tab
 ```
 
-`swift test` runs the tests of the switch decisions.
+```
+Sources/SleepGuardKit/         what the app and the helper share
+├── SleepGuard.swift         the two-message interface, the decisions, who may call
+├── Power.swift              charger, lid and the kernel's sleep switch, read from IOKit
+└── SleepGuardClient.swift   the connection that *is* the hold
+Sources/TileBanditSleepGuard/
+└── main.swift               the helper: the only code that runs as root
+```
+
+`swift test` runs the tests of the switch decisions and of the helper's.
 
 ### When a switch goes wrong
 

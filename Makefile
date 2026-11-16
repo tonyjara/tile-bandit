@@ -1,6 +1,10 @@
 APP_NAME = Tile Bandit
 BUILD_DIR = .build/release
 APP_DIR = dist/$(APP_NAME).app
+# The privileged helper behind Stay Awake with Lid Closed, and the launchd
+# plist SMAppService registers it from. Both go inside the bundle.
+HELPER = TileBanditSleepGuard
+HELPER_ID = com.twonary.TileBandit.SleepGuard
 # Ad-hoc by default. The Accessibility (TCC) grant is tied to the signature,
 # so ad-hoc re-signing resets it on every rebuild — pass a stable identity
 # (make app CODESIGN_ID="Apple Development: you@example.com (TEAMID)") to keep it.
@@ -22,7 +26,7 @@ GLYPH_SHEET = .build/glyphs.png
 SINCE ?= 1h
 LOG_PREDICATE = subsystem == "com.twonary.TileBandit"
 
-.PHONY: run dev build test log log-live release app notarized check-identity icon glyphs clean
+.PHONY: run dev build test log log-live release app signed notarized check-identity icon glyphs clean
 
 run:
 	swift run
@@ -51,12 +55,30 @@ release:
 # Wraps the release binary in a real .app bundle (menu bar only, no Dock icon).
 app: release
 	rm -rf "$(APP_DIR)"
-	mkdir -p "$(APP_DIR)/Contents/MacOS" "$(APP_DIR)/Contents/Resources"
+	mkdir -p "$(APP_DIR)/Contents/MacOS" "$(APP_DIR)/Contents/Resources" "$(APP_DIR)/Contents/Library/LaunchDaemons"
 	cp "$(BUILD_DIR)/TileBandit" "$(APP_DIR)/Contents/MacOS/TileBandit"
+	cp "$(BUILD_DIR)/$(HELPER)" "$(APP_DIR)/Contents/MacOS/$(HELPER)"
+	cp "Resources/$(HELPER_ID).plist" "$(APP_DIR)/Contents/Library/LaunchDaemons/$(HELPER_ID).plist"
 	cp Resources/Info.plist "$(APP_DIR)/Contents/Info.plist"
 	cp Resources/AppIcon.icns "$(APP_DIR)/Contents/Resources/AppIcon.icns"
+# The helper first, under its own identifier: codesign seals code that is
+# already signed inside a bundle, it doesn't sign it for you. Ad-hoc signed
+# (the default) the helper has no team, so it lets nobody in and the menu
+# item says why — Stay Awake with Lid Closed needs `make signed` or better.
+	codesign --force $(CODESIGN_FLAGS) --identifier "$(HELPER_ID)" --sign "$(CODESIGN_ID)" "$(APP_DIR)/Contents/MacOS/$(HELPER)"
 	codesign --force $(CODESIGN_FLAGS) --sign "$(CODESIGN_ID)" "$(APP_DIR)"
 	@echo "Built $(APP_DIR) — run with: open \"$(APP_DIR)\""
+
+# A local build signed the way a release is, minus the notarisation — enough
+# for macOS to register the helper, and for the helper to recognise the app.
+#
+#   make signed CODESIGN_ID="Developer ID Application: Name (TEAMID)"
+#
+# Run it from where it will live (/Applications): the helper is registered by
+# the bundle's path.
+signed: CODESIGN_FLAGS = --options runtime --timestamp
+signed: app
+	@codesign --verify --strict --deep --verbose=1 "$(APP_DIR)"
 
 # A signed, notarised, stapled zip — what the Homebrew cask downloads.
 #
@@ -64,8 +86,9 @@ app: release
 #
 # Hardened runtime and a secure timestamp are both required for notarisation,
 # and neither can be added afterwards. No entitlements file: Accessibility and
-# the event tap are TCC grants rather than entitlements, and shelling out to
-# hidutil is allowed under the hardened runtime as it stands.
+# the event tap are TCC grants rather than entitlements, shelling out to
+# hidutil is allowed under the hardened runtime as it stands, and the helper
+# gets its privilege from launchd running it as root, not from an entitlement.
 notarized: CODESIGN_FLAGS = --options runtime --timestamp
 # The identity is checked first, as its own prerequisite: finding out the
 # certificate is wrong *after* a release build is a slow way to learn it.

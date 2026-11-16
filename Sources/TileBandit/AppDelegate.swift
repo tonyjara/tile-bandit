@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let keyCapture = KeyCapture()
     private let maximizeHold = MaximizeHold()
     private let caffeine = Caffeine()
+    private let lidAwake = LidAwake()
 
     private var statusItem: NSStatusItem!
     /// The coffee cup, present only while caffeinated — see `rebuildMenu()`.
@@ -34,6 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.imagePosition = .imageLeading
 
         engine.onActiveWorkspaceChange = { [weak self] in self?.rebuildMenu() }
+        lidAwake.onChange = { [weak self] in self?.rebuildMenu() }
+        lidAwake.recoverAtLaunch()
 
         // A display change swaps which profile — which set of workspaces — is
         // live, so hotkeys and the menu have to be rebuilt right away rather
@@ -136,6 +139,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The assertions would die with the process anyway; releasing them
         // here just makes it explicit.
         caffeine.stop()
+        // Unlike those, the lid setting does *not* die with the process — it
+        // is the helper's to put back, which it does when this connection
+        // closes. Closing it here rather than leaving it to the exit just
+        // makes that the first thing to happen.
+        lidAwake.stop()
     }
 
     private func registerHotkeys() {
@@ -247,6 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             store: store,
             activeWorkspaceID: engine.activeWorkspaceID,
             caffeinated: caffeine.isActive,
+            lidAwake: lidAwake.menuState,
             target: self
         ).build()
         menu.delegate = self
@@ -403,6 +412,56 @@ extension AppDelegate: StatusMenuActions {
 
     @objc func menuToggleCaffeinate() {
         toggleCaffeinate()
+    }
+
+    @objc func menuToggleLidAwake() {
+        if lidAwake.isOn {
+            lidAwake.stop()
+            return
+        }
+        switch lidAwake.start() {
+        case .started, .unavailable:
+            break
+        case .needsApproval:
+            explainHelperApproval()
+        case let .failed(reason):
+            activate()
+            let alert = NSAlert()
+            alert.icon = AppIconArt.image(size: 128)
+            alert.messageText = "Stay Awake with Lid Closed couldn't start."
+            alert.informativeText = "\(reason). `make log` (or Console, subsystem com.twonary.TileBandit) has the details."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+    }
+
+    @objc func menuOpenLoginItems() {
+        LidAwake.openLoginItems()
+    }
+
+    /// The one moment this app asks for more than a TCC grant, so it says
+    /// what for before sending anyone to System Settings.
+    private func explainHelperApproval() {
+        activate()
+        let alert = NSAlert()
+        alert.icon = AppIconArt.image(size: 128)
+        alert.messageText = "Allow Tile Bandit's helper to keep the Mac awake."
+        alert.informativeText = """
+            Only root can stop a Mac sleeping when its lid closes, so this one feature uses a small helper that \
+            macOS has to be told to allow.
+
+            In System Settings ▸ General ▸ Login Items & Extensions, switch on Tile Bandit under \
+            “Allow in the Background” (App Background Activity) and confirm with Touch ID or your password. \
+            Stay Awake with Lid Closed then switches on by itself.
+
+            The helper does one thing: it turns sleep off while Tile Bandit is running and the charger is in, \
+            and back on the moment either stops being true.
+            """
+        alert.addButton(withTitle: "Open Login Items")
+        alert.addButton(withTitle: "Not Now")
+        if alert.runModal() == .alertFirstButtonReturn {
+            LidAwake.openLoginItems()
+        }
     }
 
     @objc func menuOpenSettings() {

@@ -26,6 +26,9 @@ enum Log {
     /// Per-window workspaces: what was parked and shown, which workspace took
     /// which window, and every move that did not take.
     static let windows = Logger(subsystem: subsystem, category: "window")
+    /// Stay Awake with Lid Closed, the app's side. The helper writes under
+    /// the same subsystem as `sleepguard`, so `make log` shows both halves.
+    static let power = Logger(subsystem: subsystem, category: "power")
 }
 
 extension Logger {

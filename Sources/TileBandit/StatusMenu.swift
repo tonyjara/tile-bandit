@@ -94,6 +94,8 @@ private func menuSymbol(_ names: String...) -> NSImage {
     func menuReleaseWindows()
     func menuToggleKeyModifications()
     func menuToggleCaffeinate()
+    func menuToggleLidAwake()
+    func menuOpenLoginItems()
     func menuOpenSettings()
     func menuReloadConfig()
     func menuCheckForUpdates()
@@ -114,6 +116,8 @@ struct StatusMenu {
     let store: ConfigStore
     let activeWorkspaceID: UUID?
     let caffeinated: Bool
+    /// nil on a Mac with no lid, which has no use for the toggle.
+    let lidAwake: LidAwake.MenuState?
     unowned let target: StatusMenuActions
 
     func build() -> NSMenu {
@@ -330,6 +334,8 @@ struct StatusMenu {
         caffeinate.state = caffeinated ? .on : .off
         caffeinate.toolTip = "Keep the display and the Mac awake until switched off or Tile Bandit quits"
 
+        if let lidAwake { addLidAwake(lidAwake, to: menu) }
+
         // The master switch belongs in the menu bar rather than only in
         // Settings: when a remap misfires, the keyboard is exactly the thing
         // you can't use to go fix it.
@@ -366,6 +372,39 @@ struct StatusMenu {
             shortcut: nil,
             to: menu
         )
+    }
+
+    /// The toggle, and under it a line saying what is actually happening —
+    /// on the charger and awake, or on battery and sleeping as usual. The two
+    /// differ by design (the charger decides, not the checkmark), so the
+    /// checkmark alone would mislead.
+    private func addLidAwake(_ state: LidAwake.MenuState, to menu: NSMenu) {
+        let item = add(
+            "Stay Awake with Lid Closed (on Power)",
+            #selector(StatusMenuActions.menuToggleLidAwake),
+            symbol: "powerplug",
+            shortcut: nil,
+            to: menu
+        )
+        item.image = menuSymbol("powerplug", "bolt")
+        item.state = state.isOn ? .on : .off
+        if let reason = state.disabledReason {
+            // No action and no target: AppKit greys a row nothing answers.
+            item.action = nil
+            item.target = nil
+            item.toolTip = reason
+            return
+        }
+        item.toolTip = "Closing the lid with no display attached won't sleep the Mac while the charger is in. "
+            + "Unplug it, quit Tile Bandit or switch this off, and it sleeps as usual."
+        guard let detail = state.detail else { return }
+        let line = NSMenuItem(title: detail, action: nil, keyEquivalent: "")
+        line.indentationLevel = 2
+        if state.detailOpensLoginItems {
+            line.action = #selector(StatusMenuActions.menuOpenLoginItems)
+            line.target = target
+        }
+        menu.addItem(line)
     }
 
     // MARK: Pieces

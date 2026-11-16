@@ -9,10 +9,15 @@ natively, so any editor that speaks it works).
 - `swift build` / `swift run` — dev. `swift run` starts a second Tile Bandit:
   quit the installed one first, or both register the same hotkeys and both
   hide apps.
-- `swift test` (`make test`) — the switch decisions that need no screen
+- `swift test` (`make test`) — the switch decisions that need no screen, and
+  the lid helper's decisions, which need no root
 - `make log` / `make log-live` — what the switcher did and why, from the
   system log (`SINCE=3h make log` for further back); see Log.swift
 - `make app` — release bundle at `dist/Tile Bandit.app` (ad-hoc signed)
+- `make signed CODESIGN_ID="Developer ID Application: … (TEAMID)"` — `make app`
+  signed like a release (hardened runtime, timestamp), not notarised. The least
+  that makes Stay Awake with Lid Closed work: macOS registers the helper only
+  for a team-signed bundle, and the helper recognises the app by that team.
 - `make notarized CODESIGN_ID="Developer ID Application: … (TEAMID)"` — signed,
   notarised, stapled zip for the Homebrew cask; prints the sha256 to paste into
   `packaging/tile-bandit.rb`. Hardened runtime and timestamp are set there and
@@ -23,6 +28,11 @@ natively, so any editor that speaks it works).
   dark. A 16pt drawing can't be judged from source.
 
 ## Architecture (Sources/TileBandit/)
+
+Three targets. `TileBandit` is the app and almost everything below.
+`TileBanditSleepGuard` is the privileged helper for Stay Awake with Lid Closed
+— the only code that runs as root, one file — and `SleepGuardKit` is the small
+library the two share. They are described under `LidAwake.swift`.
 
 - `main.swift` — NSApplication bootstrap; activation policy `.accessory`.
   Calls `Banner.show()` first.
@@ -70,7 +80,9 @@ natively, so any editor that speaks it works).
   grid glyph saying whether Apply Grid Layout has anything to do there) plus
   next/previous; Windows (plus Move Window to ▸ and Bring Parked Windows Back
   once an app is per-window, and only then); then Setup (which ends with Check
-  for Updates… — see UpdateChecker.swift). Key equivalents come from the config
+  for Updates… — see UpdateChecker.swift; Stay Awake with Lid Closed sits under
+  Caffeinate with a line beneath it saying what is true right now, and is left
+  out on a Mac with no lid). Key equivalents come from the config
   rather than being hard-coded, so a reassignment shows up in the menu. Section
   headers are `NSMenuItem.sectionHeader` on macOS 14+ and a styled disabled
   item below that. The Key Modifications master switch is in the menu on
@@ -118,6 +130,75 @@ natively, so any editor that speaks it works).
   AppDelegate shows a second status item (a coffee cup) that stays visible
   even with `hideMenuBarIcon`, and clicking it switches Caffeinate off.
   Permission-free.
+- `LidAwake.swift` — Stay Awake with Lid Closed (on Power): the Mac keeps
+  running with the lid shut and no display, while the charger is in. Caffeinate
+  can't do it — no assertion an ordinary process may take survives the lid —
+  and what can is `pmset disablesleep` (`IOPMSetSystemPowerSetting` with
+  `SleepDisabled`, which checks for uid 0 in IOKitUser itself; it is what
+  Amphetamine's Power Protect runs through a sudoers rule on Apple silicon).
+  That setting is a *preference*: it survives the process that set it and a
+  reboot. So the design is built around putting it back, and the part that
+  does lives in the helper, not here:
+  - `Sources/TileBanditSleepGuard/main.swift` — the helper, a launchd daemon
+    registered with `SMAppService.daemon` from
+    `Contents/Library/LaunchDaemons/com.twonary.TileBandit.SleepGuard.plist`
+    (`BundleProgram`, so it runs from inside the bundle; allowed once by an
+    admin under Login Items ▸ Allow in the Background). Its interface is
+    `SleepGuardXPC`: `hold` and `check`, no arguments. **The connection is the
+    hold** — there is no release message, so quitting, crashing and switching
+    the toggle off are one path. Sleep is off only while a connection holds
+    *and* the Mac is on the charger, and the helper reads the charger itself
+    (IOPS notification plus a 10 s look, in case one is missed), so an app
+    that hangs can't keep a Mac awake on battery. A note
+    (`/var/db/com.twonary.TileBandit.SleepGuard.active`) is written *before*
+    sleep goes off and removed after it is back; `RunAtLoad` and
+    `KeepAlive ▸ SuccessfulExit=false` mean launchd starts the helper at boot
+    and again if it dies, and a note with nobody holding is a run that ended
+    badly — sleep is put back first. It exits when idle, and non-zero if a
+    restore failed, which is what makes launchd run it again.
+    `ThrottleInterval` is 1: at launchd's default 10 s a killed helper left
+    sleep off for ten seconds, and a quick off-and-on of the toggle sat at
+    "Starting…" as long. Callers are checked with
+    `setConnectionCodeSigningRequirement`: Tile Bandit's identifier, signed by
+    *the team that signed the helper* (read off its own signature, so nothing
+    is hard-coded and a fork pairs only with itself); unsigned or ad-hoc it
+    lets nobody in. pmset is run by absolute path with fixed arguments and an
+    empty environment, and its exit status is ignored on purpose — it prints
+    "must be run as root" and exits 0 — in favour of reading the kernel flag
+    back. A `disablesleep` the user set by hand has no note and is left
+    alone; held over, it is adopted (`.adopt`), because the worse mistake is
+    a toggle that goes off and leaves sleep disabled.
+    Putting sleep back only *allows* it: the lid closed while it was refused
+    and macOS doesn't look again, so with any idle assertion held (agents hold
+    them constantly) the Mac would stay awake in a bag. Two seconds after a
+    restore — long enough for a caller whose helper died to take its hold
+    again — the helper asks for sleep itself when the lid is shut and macOS
+    would be asleep (`shouldSleepNow`: the kernel's own
+    `AppleClamshellCausesSleep`, or simply on battery). Not on SIGTERM.
+    A debug build can be pointed at a folder of files instead of the machine
+    (`SLEEPGUARD_FAKE_MACHINE`, `#if DEBUG` only — `strings` on a release
+    helper finds nothing), which is how hold, unplug, a killed caller, a
+    killed helper and a leftover note were exercised without root, under a
+    user launchd agent.
+  - `Sources/SleepGuardKit/` — `SleepGuard.swift` (the protocol, the names,
+    the requirement, and `SleepGuardPolicy`/`LidAwakeStatus`, pure and covered
+    by `SleepGuardTests`), `Power.swift` (charger, lid, and the kernel's
+    `SleepDisabled`, all read from IOKit with no grant — the root domain's
+    registry property rather than the preference file, since that is the flag
+    that actually refuses sleep) and `SleepGuardClient.swift` (the app's end:
+    re-asks when the helper is interrupted, gives up after five tries).
+  - `LidAwake` itself is the thin end: registers the helper, opens the
+    connection, and tells the menu what is *true* — "On", "On battery — sleeps
+    as usual", "Not in effect" — from `Power`, never from the toggle. Session
+    only, like Caffeinate. `.requiresApproval` gets an alert that says what
+    the helper is for, then polls for five minutes so the toggle comes on by
+    itself once allowed. Availability is LoginItem's question plus a team:
+    a `swift run` or ad-hoc build shows the item greyed with the reason.
+    `recoverAtLaunch` sends `check` when sleep is found disabled at launch —
+    any message starts the helper, and starting is when it looks for a note.
+    `restPanelUnderLid` puts the built-in panel to sleep while the lid is shut
+    and it is the only display (unprivileged `pmset displaysleepnow`), since
+    sleep being refused is also what would have switched it off.
 - `UpdateChecker.swift` — one HTTPS GET at `api.github.com/.../releases/latest`,
   behind the menu's Check for Updates…. It deliberately *only asks*: the cask
   owns installation, so there is nothing to download, verify or swap. Where
@@ -745,6 +826,10 @@ natively, so any editor that speaks it works).
   (tap one thing, hold another) or a chord needs the event tap — so a config
   with nothing but remaps never creates one, and never needs a grant. The tap is inert inside
   secure input, which is the price of it.
+- Root is used for exactly one thing: the lid helper flipping `pmset
+  disablesleep`. Keep the helper at two argument-less messages. Anything it
+  needs to know it reads for itself, and anything that can be done without
+  root (reading power state, sleeping the display) is done by the app.
 - Tiling (LayoutEngine/SnapManager's AX calls) and dual-role keys
   (DualRoleTap) need the Accessibility permission; everything else must stay
   permission-free. A workspace switch *uses* the grant when it is there (to

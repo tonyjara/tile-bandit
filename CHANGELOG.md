@@ -6,6 +6,20 @@ the Homebrew cask points at.
 
 ## Unreleased
 
+### Added
+
+- **Stay Awake with Lid Closed (on Power).** A toggle under Setup that keeps a
+  MacBook running with the lid shut and no display attached, for as long as the
+  charger is in — for leaving it working at the desk while its monitor goes
+  elsewhere. Unplug the charger, switch the toggle off or quit Tile Bandit and
+  the Mac sleeps as usual; the line under the toggle says which is true right
+  now. It needs a small helper that runs as root, since macOS lets nothing else
+  stop a lid-close sleep: the first time, allow Tile Bandit under System
+  Settings ▸ General ▸ Login Items & Extensions ▸ Allow in the Background. The
+  helper takes no commands beyond "hold" and "check", answers only Tile Bandit,
+  watches the charger itself, and puts sleep back if Tile Bandit quits or
+  crashes, and at the next start if the Mac itself went down.
+
 ### Fixed
 
 - **Switching to a workspace with none of its apps running left the previous
