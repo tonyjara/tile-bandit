@@ -20,6 +20,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     /// The coffee cup, present only while caffeinated — see `rebuildMenu()`.
     private var caffeineItem: NSStatusItem?
+    /// The plug, present only while Stay Awake with Lid Closed is really
+    /// holding sleep off — see `updateLidAwakeItem()`.
+    private var lidAwakeItem: NSStatusItem?
     /// Who was in front when the status menu opened — see `menuMaximizeWindow`.
     private var frontmostWhenMenuOpened: NSRunningApplication?
     private var settingsWindow: NSWindow?
@@ -250,6 +253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.title = name.map { " \($0)" } ?? ""
 
         updateCaffeineItem()
+        updateLidAwakeItem()
 
         let menu = StatusMenu(
             store: store,
@@ -281,6 +285,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.target = self
         item.button?.action = #selector(menuToggleCaffeinate)
         caffeineItem = item
+    }
+
+    /// The same idea for Stay Awake with Lid Closed, with one difference that
+    /// is the point of it: the cup follows the toggle, the plug follows the
+    /// *machine*. It is there only while sleep is actually off (`isHolding`:
+    /// charger in, helper holding, kernel agreeing) and gone the moment the
+    /// charger comes out, even though the toggle is still on — a glance at
+    /// the menu bar has to be enough to know whether closing the lid is safe.
+    private func updateLidAwakeItem() {
+        guard lidAwake.isHolding else {
+            if let item = lidAwakeItem { NSStatusBar.system.removeStatusItem(item) }
+            lidAwakeItem = nil
+            return
+        }
+        guard lidAwakeItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        let image = (NSImage(systemSymbolName: "powerplug.fill", accessibilityDescription: "Staying awake with the lid closed")
+            ?? NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: "Staying awake with the lid closed"))?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .regular))
+        image?.isTemplate = true
+        item.button?.image = image
+        item.button?.toolTip = "Staying awake — the Mac won't sleep, lid closed or not, while the charger is in. Click to let it."
+        item.button?.target = self
+        item.button?.action = #selector(menuToggleLidAwake)
+        lidAwakeItem = item
     }
 
     private func toggleCaffeinate() {

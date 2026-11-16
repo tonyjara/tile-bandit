@@ -316,6 +316,11 @@ desk while its monitor goes elsewhere.
 - **Only while Tile Bandit runs and the toggle is on.** Switch it off, quit, or
   let Tile Bandit crash, and sleep is back. The toggle is per session: it
   starts off at every launch.
+- **A plug in the menu bar means the Mac won't sleep.** It shows only while
+  sleep is really being held off — charger in, helper holding, the system
+  agreeing — and goes the moment any of that stops, including when the charger
+  comes out with the toggle still on. It stays even if you've hidden Tile
+  Bandit's own icon, and clicking it switches the toggle off.
 - The line under the toggle says what is true right now — on and awake, or on
   battery and sleeping as usual — read from the system rather than from the
   checkmark.

@@ -120,6 +120,12 @@ public enum LidAwakeStatus: Equatable {
     /// On power and the helper took the hold, yet sleep is still on.
     case notApplied
 
+    /// Whether the Mac is, right now, being kept from sleeping — what the menu
+    /// bar indicator shows. Only `active`: a toggle that is on but waiting for
+    /// the charger is a Mac that will sleep, and the indicator exists to be
+    /// believed at a glance.
+    public var holdsSleepOff: Bool { self == .active }
+
     /// Derived from what the machine reports, never from what was asked for:
     /// "active" means the kernel says sleep is disabled.
     public static func resolve(wanted: Bool, acknowledged: Bool, onExternalPower: Bool, sleepDisabled: Bool) -> LidAwakeStatus {

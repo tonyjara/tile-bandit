@@ -79,6 +79,11 @@ final class LidAwake {
 
     var isOn: Bool { wanted }
 
+    /// Sleep is off at this moment, by this toggle: on the charger, the helper
+    /// holding, and the kernel saying so. What the menu bar indicator follows —
+    /// it is gone the moment any of the three stops being true.
+    var isHolding: Bool { availability == .available && status.holdsSleepOff }
+
     var status: LidAwakeStatus {
         LidAwakeStatus.resolve(
             wanted: wanted,
@@ -296,7 +301,7 @@ final class LidAwake {
     /// Tells the menu, and the log, only when what's shown is different.
     private func changed() {
         let state = menuState
-        let shown = "\(state?.isOn ?? false)|\(state?.detail ?? "")"
+        let shown = "\(state?.isOn ?? false)|\(state?.detail ?? "")|\(isHolding)"
         guard shown != lastShown else { return }
         lastShown = shown
         Log.power.line("lid-awake: toggle \(wanted ? "on" : "off")\(state?.detail.map { " · \($0)" } ?? "") [power=\(Power.onExternalPower ? "charger" : "battery") sleepDisabled=\(Power.sleepDisabled) lidClosed=\(Power.lidClosed ?? false)]")

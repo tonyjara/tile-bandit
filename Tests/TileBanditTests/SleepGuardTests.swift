@@ -122,6 +122,21 @@ final class SleepGuardTests: XCTestCase {
         XCTAssertEqual(Status.resolve(wanted: true, acknowledged: true, onExternalPower: false, sleepDisabled: true), .waitingForPower)
     }
 
+    /// The menu bar indicator says "this Mac won't sleep". It must be true in
+    /// exactly one state, and false in every state where the toggle is on but
+    /// the Mac would sleep anyway.
+    func testIndicatorShowsOnlyWhileSleepIsReallyOff() {
+        XCTAssertTrue(LidAwakeStatus.active.holdsSleepOff)
+        for status in [LidAwakeStatus.off, .starting, .waitingForPower, .notApplied] {
+            XCTAssertFalse(status.holdsSleepOff, "\(status)")
+        }
+        // The charger comes out with the toggle still on: gone at once, without
+        // waiting for the helper to have flipped the switch back.
+        XCTAssertFalse(LidAwakeStatus.resolve(wanted: true, acknowledged: true, onExternalPower: false, sleepDisabled: true).holdsSleepOff)
+        // The toggle goes off: gone, whatever the kernel still says.
+        XCTAssertFalse(LidAwakeStatus.resolve(wanted: false, acknowledged: true, onExternalPower: true, sleepDisabled: true).holdsSleepOff)
+    }
+
     // MARK: Who may call
 
     func testRequirementNamesTheIdentifierAndTheTeam() {

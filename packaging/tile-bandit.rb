@@ -3,7 +3,7 @@
 # each release; `make notarized` prints the version and sha256 to paste in.
 cask "tile-bandit" do
   version "1.8.0"
-  sha256 "7d6261607fcb9562fea2b93fcfe2d4749b43aed85d2fb879b0a6776cdd191da7"
+  sha256 "5c0ad83b30025a585171ef33c900ed2499c8b4267b4c8cbfa923f90352ad2ccc"
 
   url "https://github.com/tonyjara/tile-bandit/releases/download/v#{version}/TileBandit-#{version}.zip"
   name "Tile Bandit"

@@ -196,6 +196,13 @@ library the two share. They are described under `LidAwake.swift`.
     a `swift run` or ad-hoc build shows the item greyed with the reason.
     `recoverAtLaunch` sends `check` when sleep is found disabled at launch —
     any message starts the helper, and starting is when it looks for a note.
+    While it is really holding (`isHolding`, which is
+    `LidAwakeStatus.holdsSleepOff`: `.active` and nothing else) AppDelegate
+    shows a third status item, a filled plug, beside Caffeinate's cup. The cup
+    follows its toggle; the plug follows the *machine* — on battery with the
+    toggle still on it is gone, because it has to be believable at a glance
+    that closing the lid is safe. Like the cup it survives `hideMenuBarIcon`
+    and a click switches the toggle off.
     `restPanelUnderLid` puts the built-in panel to sleep while the lid is shut
     and it is the only display (unprivileged `pmset displaysleepnow`), since
     sleep being refused is also what would have switched it off.

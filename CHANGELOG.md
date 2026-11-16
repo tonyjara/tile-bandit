@@ -13,7 +13,9 @@ the Homebrew cask points at.
   charger is in — for leaving it working at the desk while its monitor goes
   elsewhere. Unplug the charger, switch the toggle off or quit Tile Bandit and
   the Mac sleeps as usual; the line under the toggle says which is true right
-  now. It needs a small helper that runs as root, since macOS lets nothing else
+  now. While sleep is really being held off, a plug sits in the menu bar — it
+  is there only then, so a glance says whether the lid can close, and it is
+  gone the moment the charger comes out. Clicking it switches the toggle off. It needs a small helper that runs as root, since macOS lets nothing else
   stop a lid-close sleep: the first time, allow Tile Bandit under System
   Settings ▸ General ▸ Login Items & Extensions ▸ Allow in the Background. The
   helper takes no commands beyond "hold" and "check", answers only Tile Bandit,
