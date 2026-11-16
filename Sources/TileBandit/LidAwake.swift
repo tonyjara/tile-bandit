@@ -299,7 +299,7 @@ final class LidAwake {
         let shown = "\(state?.isOn ?? false)|\(state?.detail ?? "")"
         guard shown != lastShown else { return }
         lastShown = shown
-        Log.power.line("lid-awake: \(wanted ? "on" : "off")\(state?.detail.map { " — \($0)" } ?? "") [power=\(Power.onExternalPower ? "charger" : "battery") sleepDisabled=\(Power.sleepDisabled) lidClosed=\(Power.lidClosed ?? false)]")
+        Log.power.line("lid-awake: toggle \(wanted ? "on" : "off")\(state?.detail.map { " · \($0)" } ?? "") [power=\(Power.onExternalPower ? "charger" : "battery") sleepDisabled=\(Power.sleepDisabled) lidClosed=\(Power.lidClosed ?? false)]")
         onChange?()
     }
 }

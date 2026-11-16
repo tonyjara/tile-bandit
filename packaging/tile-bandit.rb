@@ -2,8 +2,8 @@
 # Copy it to Casks/tile-bandit.rb in the tap repo (tonyjara/homebrew-tap) on
 # each release; `make notarized` prints the version and sha256 to paste in.
 cask "tile-bandit" do
-  version "1.7.1"
-  sha256 "8cb1c667bd1643d0fbcbe9c8bbefa69aaa1a179c5da957bebe80d7cc3c3f794b"
+  version "1.8.0"
+  sha256 "7d6261607fcb9562fea2b93fcfe2d4749b43aed85d2fb879b0a6776cdd191da7"
 
   url "https://github.com/tonyjara/tile-bandit/releases/download/v#{version}/TileBandit-#{version}.zip"
   name "Tile Bandit"
