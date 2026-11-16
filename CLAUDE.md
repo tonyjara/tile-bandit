@@ -344,7 +344,15 @@ library the two share. They are described under `LidAwake.swift`.
   0.1, 0.4 and 1.2 s after a switch: apps that were asked to hide and still
   draw a window are asked again and logged as `LEFTOVER`, member apps still
   hidden are asked to show again, and while either remains it looks again at
-  3, 6 and 12 s before saying it gave up. Only processes asked at the switch
+  3, 6 and 12 s before saying it gave up. Two kinds of leftover are not slow
+  but out of reach, and `stillUp` names them so the log does not blame the
+  app's responsiveness: one that reads hidden while a window of it is still
+  drawn has a window with `canHide` off (Electron turns it off on every open
+  window when the app leaves the Dock, and it stays off if macOS rather than
+  the app puts the Dock icon back — how Kururu's main window stayed over every
+  workspace, docs/audit/workspace-switch.md finding 10), and an accessory app
+  is never hidden by `hide()` at all. Hiding is all a switch does to an app,
+  so those are fixed in the app. Only processes asked at the switch
   are ever asked again — an app opened afterwards is the user's — and the app
   in front is left alone when the switch moved focus elsewhere, since it can
   only have been brought back since. Apps with no bundle identifier (anything

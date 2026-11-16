@@ -685,6 +685,9 @@ final class WorkspaceEngine {
         // hidden yet: our activation hasn't landed, and it can't hide while it
         // is the active app. So focus is asked for again before it is.)
         var leftovers: [NSRunningApplication] = []
+        // The leftovers hiding cannot reach, by why (`stillUp`).
+        var exempt: [NSRunningApplication] = []
+        var dockless: [NSRunningApplication] = []
         var focusNote = ""
         if plan.standIn, let front, plan.asked.contains(front.processIdentifier),
            !mayStay(front, allowed: plan.allowed),
@@ -703,6 +706,13 @@ final class WorkspaceEngine {
             if broughtBack { continue }
             if drawn.contains(app.processIdentifier) {
                 leftovers.append(app)
+                switch Self.stillUp(policy: app.activationPolicy, isHidden: app.isHidden) {
+                case .notHiddenYet: break
+                case .exemptWindow: exempt.append(app)
+                case .accessory: dockless.append(app)
+                }
+                // Asked again whichever it is: it costs nothing, and the flag
+                // behind `exemptWindow` is a cache that can be stale.
                 app.hide()
             } else if !app.isHidden {
                 // Nothing of it on the visible desktops, yet not hidden: its
@@ -733,6 +743,8 @@ final class WorkspaceEngine {
             + focusNote
             + scopeNote
             + (leftovers.isEmpty ? "" : " | LEFTOVER (asked to hide, still on screen, asked again): \(names(leftovers))")
+            + (exempt.isEmpty ? "" : " | HIDDEN BUT ON SCREEN (a window exempt from hiding): \(names(exempt))")
+            + (dockless.isEmpty ? "" : " | NO DOCK ICON (macOS does not hide these): \(names(dockless))")
             + (stillHidden.isEmpty ? "" : " | STILL HIDDEN (asked to show again): \(names(stillHidden))")
         if leftovers.isEmpty, stillHidden.isEmpty, scopeNote.isEmpty {
             Log.switching.line(summary)
@@ -747,10 +759,25 @@ final class WorkspaceEngine {
             if next < Self.passDelays.count {
                 schedulePass(plan, index: next)
             } else {
-                Log.switching.failure(
-                    "#\(plan.seq) giving up after \(elapsed)s: \(names(leftovers + stillHidden)) never did as asked"
-                        + " (full screen, or not responding?)"
-                )
+                // Said by cause: two of these are not the app being slow, and
+                // "not responding?" sent the reader looking in the wrong place.
+                let beyondHide = Set((exempt + dockless).map(\.processIdentifier))
+                let unanswered = leftovers.filter { !beyondHide.contains($0.processIdentifier) } + stillHidden
+                var reasons: [String] = []
+                if !unanswered.isEmpty {
+                    reasons.append("\(names(unanswered)) never did as asked (full screen, or not responding?)")
+                }
+                if !exempt.isEmpty {
+                    reasons.append(
+                        "\(names(exempt)) is hidden as far as macOS goes and still has a window on screen:"
+                            + " its app has exempted that window from hiding (NSWindow.canHide is off), so hiding the app"
+                            + " cannot take it down and only the app can change that"
+                    )
+                }
+                if !dockless.isEmpty {
+                    reasons.append("\(names(dockless)) has no Dock icon (an accessory app), and macOS does not hide those")
+                }
+                Log.switching.failure("#\(plan.seq) giving up after \(elapsed)s: " + reasons.joined(separator: "; "))
             }
         }
     }
@@ -943,6 +970,40 @@ final class WorkspaceEngine {
     /// back only when it isn't the app that was in front before.
     static func wasBroughtBack(_ pid: pid_t, front: pid_t?, frontBefore: pid_t?, movedFocus: Bool) -> Bool {
         pid == front && (movedFocus || frontBefore != pid)
+    }
+
+    /// Why an app that was asked to hide still draws a window.
+    enum StillUp: Equatable {
+        /// It has not hidden yet: busy, or the request was dropped. Asking
+        /// again is what gets it there.
+        case notHiddenYet
+        /// macOS counts the app hidden and a window of it is on screen. That
+        /// window is exempt from hiding (`NSWindow.canHide` is false), and
+        /// hiding is the only thing a switch does to an app.
+        case exemptWindow
+        /// No Dock icon. macOS ignores `hide()` for an accessory app.
+        case accessory
+    }
+
+    /// Tells an app that is slow to hide from one that hiding cannot reach.
+    ///
+    /// All three were measured (docs/audit/workspace-switch.md, finding 10).
+    /// An app whose main thread is busy keeps reading `isHidden == false`
+    /// until it has taken its windows down, so hidden *and* drawn is not
+    /// slowness: the window that is left has `canHide` off. Electron turns it
+    /// off on every open window when an app leaves the Dock
+    /// (`app.dock.hide()`, or `setVisibleOnAllWorkspaces` with
+    /// `visibleOnFullScreen`), and nothing turns it back on if macOS rather
+    /// than the app puts the Dock icon back. That is how Kururu's main window
+    /// stayed over every other workspace. And an accessory app is never
+    /// hidden at all: `hide()` leaves it as it is, flag included.
+    ///
+    /// Only for the log. Either way the app is asked again, since `isHidden`
+    /// is a cache; but the line that gives up names the cause, where it used
+    /// to guess "not responding?" for all three.
+    static func stillUp(policy: NSApplication.ActivationPolicy, isHidden: Bool) -> StillUp {
+        if policy != .regular { return .accessory }
+        return isHidden ? .exemptWindow : .notHiddenYet
     }
 
     /// Takes focus for Tile Bandit itself. It has no window on screen (bar an

@@ -4,6 +4,18 @@ Notable changes, newest first. Versions follow the number in
 `Resources/Info.plist`, which is what `make app` stamps into the bundle and what
 the Homebrew cask points at.
 
+## Unreleased
+
+### Changed
+
+- **The log says why an app stayed on screen after a switch.** An app that
+  macOS already counts as hidden while one of its windows is still drawn has
+  exempted that window from hiding, and an app with no Dock icon is never
+  hidden by macOS at all. Neither is the app being slow, which is what the
+  log used to suggest for both; it now names the cause (`HIDDEN BUT ON
+  SCREEN`, `NO DOCK ICON`). The fix for such a window is in the app that owns
+  it.
+
 ## 1.8.0
 
 ### Added

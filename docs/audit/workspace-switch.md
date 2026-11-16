@@ -22,6 +22,7 @@ then built, all in the release after 1.5.0:
 | 7. The placeholder display | Fixed: it is no longer taken for a setup. Wake is otherwise unchanged. |
 | 8. Relaunch and quit | Unchanged. |
 | 9. Failures that leave no trace | Hotkey registrations and Accessibility errors are logged, and Accessibility calls have a one-second limit. |
+| 10. A window its app exempts from hiding (added 2026-11-16) | Not fixed here: hiding is all a switch does to an app, and the exemption is the app's. The log now names the cause. The fix is in Kururu. |
 
 The log proposed under "Logging to add" exists: `make log`, or
 `/usr/bin/log show --last 1h --info --predicate 'subsystem == "com.twonary.TileBandit"'`.
@@ -385,6 +386,88 @@ None of these was seen failing; each would be invisible if it did.
 **Proposed fix.** Log each of these (see below), set a short Accessibility
 timeout (0.5 s) on every element before use, and show a hotkey that failed to
 register in Settings next to its shortcut.
+
+### 10. A window its app has exempted from hiding (added 2026-11-16, confirmed)
+
+Reported on 1.8.0: switching from C (Kururu, Chrome) to M (WhatsApp, Discord)
+left Kururu's main window on screen. In that day's log it did so on all 40
+switches into M, from the first line the log still held (11:38) and across a
+restart of Tile Bandit: never an intermittent failure.
+
+**Where.** `WorkspaceEngine.swift:1049` (`hideApps`) and `:707-716` (the
+checks in `runPass`): the only thing a switch ever does to an app that should
+go is `NSRunningApplication.hide()`, and the only answer to one that stayed
+is `hide()` again.
+
+**What goes wrong.** In M, macOS reported Kururu as hidden (`isHidden` true,
+read from a fresh process) while its 1795 × 1589 window was still drawn at
+layer 0. `hide()` had worked; the window did not go with the app. Asking again
+does nothing to an app that is already hidden, so the six checks ran out and
+the log blamed "full screen, or not responding?".
+
+A window stays up through an app hide only if its `NSWindow.canHide` is false.
+Kururu's main window got that way without Kururu asking for it:
+
+1. Electron's dock-hide path sets `canHide = NO` on *every open window* before
+   it turns the app into an accessory. `app.dock.hide()` goes through it, and
+   so does `setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })`
+   unless `skipTransformProcessType` is passed. Kururu's pill
+   (`desktop/talkkey.js:629`) and each screen-pen overlay (`desktop/ink.js:480`)
+   call it without; the floating Kuru and the notes pass it.
+2. The app is now an accessory with its window open. A Dock click, Spotlight
+   or `open -a` makes macOS put the Dock icon back by itself. Electron's own
+   `app.dock.show()`, the one call that sets `canHide` back, never runs.
+3. From then on the app is an ordinary Dock app whose main window cannot be
+   hidden. Kururu's record in LaunchServices: type Foreground, parent the
+   Dock.
+
+**How it was established.** Read-only on the running apps (`NSWorkspace`,
+`CGWindowListCopyWindowInfo`, the log), then scratch apps with windows at 3%
+opacity, hidden from another process as Tile Bandit does it:
+
+| Scratch app | After `hide()` |
+|---|---|
+| AppKit, a window plus a `canHide = NO` floating panel | hidden; the window goes, the panel stays |
+| The same with a blocked main thread | `isHidden` stays false until the windows are down |
+| AppKit, accessory | nothing: not hidden, window up |
+| Electron 44.3.0 (Kururu's), a window plus Kururu's floating logo made the way `float.js` makes it | hidden; the window goes |
+| Electron, a window, then a panel with `setVisibleOnAllWorkspaces` and no skip | accessory, the window's `canHide` now false; `hide()` does nothing |
+| That, then `open -a` on the app | regular again, `canHide` still false; `hide()` gives `isHidden` true **with the window still drawn** |
+
+The last row is the reported state exactly. `canHide` was read inside the
+scratch Electron with Kururu's own `stay.node`; it could not be read inside
+the running Kururu, which is the one link taken from the match rather than
+measured.
+
+**The class.** Any app with an ordinary window whose `canHide` is false, which
+includes every Electron app that leaves the Dock with a window open and is
+brought back by macOS. And any accessory app a workspace lists: `hide()` does
+nothing to it at all (finding 5 measured that for unlisted ones; 1.7.1 began
+asking listed ones, to no effect). Neither is a stale window id, a recreated
+window or an app showing itself again: the window never left.
+
+Two things follow from the window staying. It can be clicked, and Kururu
+coming forward in M takes follow-focus back to C: the log has that at
+17:42:27, 20:10:18, 20:11:23 and 20:11:28, though not what brought Kururu
+forward each time. And the mirror image exists: made an
+accessory *while hidden*, the scratch Electron kept its window hidden and
+`unhide()` did nothing, with `isHidden` reading false, so a switch would not
+even list it as `STILL HIDDEN`. Not seen on the owner's machine.
+
+**Fix.** In Kururu: pass `skipTransformProcessType: true` at
+`talkkey.js:629` and `ink.js:480` (both are `type: "panel"` already, which is
+what floats over full screen), and set `canHide` again after every
+`app.dock.show()` and `app.dock.hide()`, since `show()` turns it back *on*
+for the floating windows that are meant to stay. Until then, closing Kururu's
+window and opening it again clears it, until the pen or the pill is next
+made.
+
+In Tile Bandit nothing can hide such a window; what it could do, with the
+Accessibility grant, is move it to a corner as it does for per-window apps
+and bring it back on return. Not built: it would have a switch move windows
+of an app nobody opted in. What was built: `stillUp` tells the three cases
+apart, and the log says `HIDDEN BUT ON SCREEN` or `NO DOCK ICON` and gives up
+with the cause instead of "not responding?".
 
 ## Checked and found sound
 
